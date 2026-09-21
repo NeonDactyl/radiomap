@@ -19,4 +19,11 @@ HTTP_HEADERS = {
 }
 
 # Open-Meteo elevation API: free, no key, up to 100 points per request.
+# Primary elevation source -- fast (batched) but shares a rate limit across
+# whoever else is hitting it from the same network.
 ELEVATION_API_URL = "https://api.open-meteo.com/v1/elevation"
+
+# USGS Elevation Point Query Service: free, no key, single point per request,
+# but authoritative (3DEP) and US-only -- which matches our FCC-only station
+# data. Used as a fallback when Open-Meteo is unavailable/rate-limited.
+USGS_EPQS_URL = "https://epqs.nationalmap.gov/v1/json"

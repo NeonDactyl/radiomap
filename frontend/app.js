@@ -71,16 +71,20 @@ async function loadStations() {
   if (state.usState) params.set("state", state.usState);
   const res = await fetch(`${API}/stations?${params}`);
   state.stations = await res.json();
-  el("station-count").textContent = `${state.stations.length} stations`;
-  renderMarkers();
-  renderList();
+  showStations(state.stations);
 }
 
-function renderMarkers() {
+function showStations(stations) {
+  el("station-count").textContent = `${stations.length} stations`;
+  renderMarkers(stations);
+  renderList(stations);
+}
+
+function renderMarkers(stations) {
   state.markerLayer.clearLayers();
   state.markersById.clear();
   const color = state.service === "FM" ? "#2f6f4f" : "#2e5c8a";
-  for (const s of state.stations) {
+  for (const s of stations) {
     const marker = L.circleMarker([s.lat, s.lon], {
       radius: 5,
       color,
@@ -95,22 +99,38 @@ function renderMarkers() {
   }
 }
 
-function renderList(filterText = "") {
+function renderList(stations) {
   const listEl = el("station-list");
   listEl.innerHTML = "";
-  const needle = filterText.trim().toLowerCase();
-  const filtered = state.stations.filter((s) => {
-    if (!needle) return true;
-    return s.callsign.toLowerCase().includes(needle) || (s.city || "").toLowerCase().includes(needle);
-  });
-  for (const s of filtered) {
+  for (const s of stations) {
     const li = document.createElement("li");
     li.dataset.id = s.id;
     if (state.selected && state.selected.id === s.id) li.classList.add("selected");
-    li.innerHTML = `<span class="call">${s.callsign}</span><span class="freq">${freqLabel(s)} &middot; ${s.city || ""}</span>`;
+    li.innerHTML = `<span class="call">${s.callsign}</span><span class="freq">${freqLabel(s)} &middot; ${s.city || ""}, ${s.state || ""}</span>`;
     li.addEventListener("click", () => selectStation(s.id));
     listEl.appendChild(li);
   }
+}
+
+let searchTimer = null;
+
+function onSearchInput(text) {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(text.trim()), 250);
+}
+
+async function runSearch(text) {
+  if (text.length < 2) {
+    showStations(state.stations);
+    return;
+  }
+  // Search nationwide (ignores the state filter): a station's city of
+  // license often isn't the market it actually serves, so restricting to
+  // the selected state can hide the exact station someone is looking for.
+  const params = new URLSearchParams({ service: state.service, search: text, limit: "50" });
+  const res = await fetch(`${API}/stations?${params}`);
+  const results = await res.json();
+  showStations(results);
 }
 
 function clearSelection() {
@@ -196,13 +216,15 @@ async function showCoverage() {
 function wireControls() {
   el("service-filter").addEventListener("change", (e) => {
     state.service = e.target.value;
+    el("station-search").value = "";
     loadStations();
   });
   el("state-filter").addEventListener("change", (e) => {
     state.usState = e.target.value;
+    el("station-search").value = "";
     loadStations();
   });
-  el("station-search").addEventListener("input", (e) => renderList(e.target.value));
+  el("station-search").addEventListener("input", (e) => onSearchInput(e.target.value));
   el("detail-close").addEventListener("click", clearSelection);
   el("coverage-btn").addEventListener("click", showCoverage);
 }

@@ -1,14 +1,23 @@
-"""Terrain elevation lookups via the Open-Meteo elevation API (free, no key,
-SRTM/ASTER-based, ~90m resolution, up to 100 points per request), backed by
-a local SQLite cache so repeated coverage runs over the same area don't
-re-hit the network.
+"""Terrain elevation lookups, backed by a local SQLite cache so repeated
+coverage runs over the same area don't re-hit the network.
+
+Two sources are used:
+- Open-Meteo (SRTM/ASTER-based, ~90m resolution): primary, because it
+  accepts up to 100 points per request. It's a shared free service though,
+  and can return 429s under load from other traffic on the same network.
+- USGS Elevation Point Query Service (3DEP, US-only): fallback when
+  Open-Meteo fails. Only one point per request, so we parallelize with a
+  thread pool, but it's authoritative US government data and matches our
+  FCC-only station coverage, so it's a solid second source rather than a
+  degraded one.
 """
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-from ..config import ELEVATION_API_URL, HTTP_HEADERS
+from ..config import ELEVATION_API_URL, HTTP_HEADERS, USGS_EPQS_URL
 from ..db import get_conn
 
 log = logging.getLogger(__name__)
@@ -16,6 +25,7 @@ log = logging.getLogger(__name__)
 BATCH_SIZE = 100
 CACHE_PRECISION = 4  # ~11m grid at the equator; plenty for terrain profiling
 INTER_BATCH_DELAY_S = 0.25  # be gentle -- avoid tripping the free API's rate limiter
+USGS_MAX_WORKERS = 10
 
 
 class ElevationUnavailable(RuntimeError):
@@ -96,7 +106,23 @@ class ElevationProvider:
     def get_elevation(self, lat: float, lon: float) -> float:
         return self.get_elevations([(lat, lon)])[0]
 
-    def _fetch_batch(self, keys: list[tuple[float, float]], retries: int = 5) -> list[float]:
+    def _fetch_batch(self, keys: list[tuple[float, float]]) -> list[float]:
+        try:
+            return self._fetch_open_meteo(keys, retries=2)
+        except Exception as exc:
+            log.warning(
+                "Open-Meteo failed for batch of %d points (%s); falling back to USGS EPQS",
+                len(keys), exc,
+            )
+        try:
+            return self._fetch_usgs(keys)
+        except Exception as exc:
+            log.warning("USGS EPQS fallback also failed for batch of %d points: %s", len(keys), exc)
+            raise ElevationUnavailable(
+                f"Both elevation sources unavailable for a batch of {len(keys)} points ({exc})"
+            )
+
+    def _fetch_open_meteo(self, keys: list[tuple[float, float]], retries: int) -> list[float]:
         lats = ",".join(str(k[0]) for k in keys)
         lons = ",".join(str(k[1]) for k in keys)
         last_exc = None
@@ -110,7 +136,7 @@ class ElevationProvider:
                 )
                 if resp.status_code == 429:
                     retry_after = resp.headers.get("Retry-After")
-                    wait = float(retry_after) if retry_after else 3.0 * attempt
+                    wait = float(retry_after) if retry_after else 2.0 * attempt
                     last_exc = RuntimeError(f"429 rate limited (attempt {attempt}/{retries})")
                     time.sleep(wait)
                     continue
@@ -122,11 +148,31 @@ class ElevationProvider:
                 return [float(e) for e in elevations]
             except Exception as exc:
                 last_exc = exc
-                time.sleep(1.0 * attempt)
-        log.warning("Elevation lookup failed for batch of %d points after %d attempts: %s", len(keys), retries, last_exc)
-        raise ElevationUnavailable(
-            f"Elevation service unavailable after {retries} attempts ({last_exc})"
-        )
+                time.sleep(0.5 * attempt)
+        raise RuntimeError(f"Open-Meteo failed after {retries} attempts: {last_exc}")
+
+    def _fetch_usgs_point(self, key: tuple[float, float], retries: int = 3) -> float:
+        lat, lon = key
+        last_exc = None
+        for attempt in range(1, retries + 1):
+            try:
+                resp = requests.get(
+                    USGS_EPQS_URL,
+                    params={"x": lon, "y": lat, "units": "Meters", "wkid": 4326, "includeDate": "false"},
+                    headers=HTTP_HEADERS,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                value = resp.json()["value"]
+                return float(value)
+            except Exception as exc:
+                last_exc = exc
+                time.sleep(0.5 * attempt)
+        raise RuntimeError(f"USGS EPQS failed for {key} after {retries} attempts: {last_exc}")
+
+    def _fetch_usgs(self, keys: list[tuple[float, float]]) -> list[float]:
+        with ThreadPoolExecutor(max_workers=USGS_MAX_WORKERS) as pool:
+            return list(pool.map(self._fetch_usgs_point, keys))
 
 
 # Module-level singleton; the in-memory cache is cheap and process-local.

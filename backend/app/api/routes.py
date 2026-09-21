@@ -69,6 +69,13 @@ def list_states():
 def list_stations(
     service: str | None = Query(None, pattern="^(FM|AM)$"),
     state: str | None = None,
+    search: str | None = Query(
+        None, min_length=2,
+        description="Callsign or city substring. Searches nationwide, ignoring `state` -- "
+        "a station's city of license often isn't the state of the market it actually "
+        "serves (e.g. WJLI is licensed to Metropolis, IL but serves Paducah, KY), so "
+        "state alone can hide the station a user is looking for.",
+    ),
     bbox: str | None = Query(
         None, description="min_lon,min_lat,max_lon,max_lat -- only return stations inside this box"
     ),
@@ -79,7 +86,11 @@ def list_stations(
     if service:
         clauses.append("service = ?")
         params.append(service)
-    if state:
+    if search:
+        clauses.append("(callsign LIKE ? OR city LIKE ?)")
+        needle = f"%{search.upper()}%"
+        params.extend([needle, needle])
+    elif state:
         clauses.append("state = ?")
         params.append(state.upper())
     if bbox:

@@ -82,17 +82,24 @@ take effect on browser refresh with no restart needed.
 
 1. Pick FM or AM and a state in the top bar.
 2. Click a station on the map or in the sidebar list to see its details
-   (power, HAAT, class, licensee, etc).
+   (power, HAAT, class, licensee, etc), or type into the search box to find
+   a station by call sign or city -- search looks nationwide regardless of
+   the selected state, because a station's FCC city of license often isn't
+   the market it actually serves (e.g. WJLI is licensed to Metropolis, IL
+   but serves Paducah, KY, so it won't show up under KY otherwise).
 3. Pick a signal-strength threshold and max radius, then "Show coverage"
    to draw the predicted coverage polygon. For AM stations you can also
    pick a ground-conductivity preset (affects groundwave range a lot).
 
-Terrain lookups hit a free public elevation API on first use per area and
-are cached afterward in `elevation_cache` inside the same SQLite DB, so
-repeat coverage runs over the same region are fast. A cold "Show coverage"
-click on a new area can take ~5-15 seconds; if the elevation API is
-rate-limited you'll see an error in the coverage panel -- wait a bit and
-retry.
+Terrain lookups hit a free public elevation API (Open-Meteo) on first use
+per area and are cached afterward in `elevation_cache` inside the same
+SQLite DB, so repeat coverage runs over the same region are fast. Open-Meteo
+is shared/rate-limited, so `backend/app/geo/elevation.py` automatically
+falls back to the USGS Elevation Point Query Service (US-only, authoritative
+3DEP data, matches our FCC-only station coverage) when it gets rate-limited.
+A cold "Show coverage" click on a new area can take ~5-15 seconds; if
+*both* sources are unavailable you'll see an error in the coverage panel --
+wait a bit and retry.
 
 ## Known limitations / next steps
 
