@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radio Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <h1>Radio Map</h1>
+    <div class="topbar-controls">
+      <label>Service
+        <select id="service-filter">
+          <option value="FM">FM</option>
+          <option value="AM">AM</option>
+        </select>
+      </label>
+      <label>State
+        <select id="state-filter">
+          <option value="">Loading...</option>
+        </select>
+      </label>
+      <span id="station-count" class="muted"></span>
+    </div>
+  </header>
+
+  <div id="body">
+    <aside id="sidebar">
+      <div id="station-list-wrap">
+        <input id="station-search" type="search" placeholder="Filter by call sign or city...">
+        <ul id="station-list"></ul>
+      </div>
+
+      <div id="detail-panel" class="hidden">
+        <button id="detail-close" title="Close">&times;</button>
+        <h2 id="detail-callsign">--</h2>
+        <div id="detail-sub" class="muted"></div>
+        <table id="detail-table"></table>
+
+        <div id="coverage-controls">
+          <h3>Expected coverage</h3>
+          <label class="row">
+            <span>Threshold</span>
+            <select id="threshold-select"></select>
+          </label>
+          <label class="row">
+            <span>Max radius (km)</span>
+            <input id="radius-input" type="number" min="5" max="300" step="5" value="90">
+          </label>
+          <label class="row" id="conductivity-row">
+            <span>Ground</span>
+            <select id="conductivity-select">
+              <option value="15">Rich soil / wet</option>
+              <option value="5" selected>Average</option>
+              <option value="2">Poor / rocky</option>
+            </select>
+          </label>
+          <button id="coverage-btn">Show coverage</button>
+          <div id="coverage-status" class="muted"></div>
+        </div>
+      </div>
+    </aside>
+
+    <main id="map"></main>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
