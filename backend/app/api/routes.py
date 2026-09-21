@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api")
 STATION_COLUMNS = (
     "id, facility_id, callsign, service, frequency_mhz, channel, class, status, "
     "city, state, country, file_number, erp_kw, erp_v_kw, power_night_kw, "
-    "haat_m, directional, lat, lon, licensee"
+    "haat_m, directional, lat, lon, licensee, genre"
 )
 
 
@@ -34,6 +34,7 @@ def _row_to_station_out(row: sqlite3.Row) -> StationOut:
         lat=row["lat"],
         lon=row["lon"],
         licensee=row["licensee"],
+        genre=row["genre"],
     )
 
 
@@ -52,17 +53,57 @@ def _row_to_station_detail(row: sqlite3.Row) -> StationDetail:
 
 @router.get("/meta/states")
 def list_states():
+    """Per-state station counts plus a bounding box computed from the
+    stations we actually have (padded a bit), used by the frontend as a
+    "jump to state" shortcut -- the map itself, not the state list, is
+    what drives which stations are shown.
+    """
     conn = get_conn()
     try:
         rows = conn.execute(
             "SELECT state, service, COUNT(*) c FROM stations GROUP BY state, service ORDER BY state"
         ).fetchall()
+        bbox_rows = conn.execute(
+            "SELECT state, MIN(lon) min_lon, MIN(lat) min_lat, MAX(lon) max_lon, MAX(lat) max_lat "
+            "FROM stations GROUP BY state"
+        ).fetchall()
     finally:
         conn.close()
+
     by_state: dict[str, dict[str, int]] = {}
     for r in rows:
         by_state.setdefault(r["state"], {})[r["service"]] = r["c"]
-    return [{"state": s, "counts": c} for s, c in sorted(by_state.items())]
+
+    bboxes = {}
+    pad = 0.15  # degrees, so the jump doesn't crop stations right at the edge
+    for r in bbox_rows:
+        bboxes[r["state"]] = [
+            r["min_lon"] - pad, r["min_lat"] - pad, r["max_lon"] + pad, r["max_lat"] + pad,
+        ]
+
+    return [
+        {"state": s, "counts": c, "bbox": bboxes.get(s)}
+        for s, c in sorted(by_state.items())
+    ]
+
+
+@router.get("/meta/genres")
+def list_genres(service: str | None = Query(None, pattern="^(FM|AM)$")):
+    clauses = ["genre IS NOT NULL"]
+    params: list = []
+    if service:
+        clauses.append("service = ?")
+        params.append(service)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            f"SELECT genre, COUNT(*) c FROM stations WHERE {' AND '.join(clauses)} "
+            "GROUP BY genre ORDER BY c DESC",
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"genre": r["genre"], "count": r["c"]} for r in rows]
 
 
 @router.get("/stations", response_model=list[StationOut])
@@ -79,6 +120,7 @@ def list_stations(
     bbox: str | None = Query(
         None, description="min_lon,min_lat,max_lon,max_lat -- only return stations inside this box"
     ),
+    genre: str | None = Query(None, description="Exact genre string, as returned by /meta/genres"),
     limit: int = Query(2000, le=5000),
 ):
     clauses = []
@@ -86,6 +128,9 @@ def list_stations(
     if service:
         clauses.append("service = ?")
         params.append(service)
+    if genre:
+        clauses.append("genre = ?")
+        params.append(genre)
     if search:
         clauses.append("(callsign LIKE ? OR city LIKE ?)")
         needle = f"%{search.upper()}%"

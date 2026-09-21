@@ -16,6 +16,7 @@ class StationOut(BaseModel):
     lat: float
     lon: float
     licensee: str | None = None
+    genre: str | None = None
 
 
 class StationDetail(StationOut):

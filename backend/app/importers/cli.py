@@ -4,13 +4,15 @@ Usage (run from backend/):
     python -m app.importers.cli --service fm --states CA,NV,OR
     python -m app.importers.cli --service am --states all
     python -m app.importers.cli --service both --states all
+    python -m app.importers.cli --genres              # attach Wikidata genre/format data
+    python -m app.importers.cli --states CA --genres  # do both in one run
 """
 import argparse
 import logging
 import time
 
 from .. import db
-from . import common, fcc_am, fcc_fm
+from . import common, fcc_am, fcc_fm, wikidata_genre
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +44,7 @@ def store_rows(rows: list[dict]) -> None:
         conn.executemany(UPSERT_SQL, rows)
 
 
-def run(service: str, states: list[str], delay: float) -> None:
-    db.init_db()
+def run_stations(service: str, states: list[str], delay: float) -> None:
     for i, state in enumerate(states):
         if service in ("fm", "both"):
             try:
@@ -71,12 +72,26 @@ def main() -> None:
         "--delay", type=float, default=1.0,
         help="Seconds to sleep between state requests (be polite to the FCC server)",
     )
+    parser.add_argument(
+        "--genres", action="store_true",
+        help="Also (or only, with --skip-stations) attach Wikidata radio-format data",
+    )
+    parser.add_argument(
+        "--skip-stations", action="store_true",
+        help="Skip the FCC station import (useful with --genres to only refresh formats)",
+    )
     args = parser.parse_args()
 
-    states = common.STATE_CODES if args.states.strip().lower() == "all" else [
-        s.strip().upper() for s in args.states.split(",") if s.strip()
-    ]
-    run(args.service, states, args.delay)
+    db.init_db()
+
+    if not args.skip_stations:
+        states = common.STATE_CODES if args.states.strip().lower() == "all" else [
+            s.strip().upper() for s in args.states.split(",") if s.strip()
+        ]
+        run_stations(args.service, states, args.delay)
+
+    if args.genres:
+        wikidata_genre.import_genres()
 
 
 if __name__ == "__main__":

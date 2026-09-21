@@ -7,10 +7,13 @@ const THRESHOLD_PRESETS = [
   { label: "40 dBu — fringe / weak-signal edge", value: 40 },
 ];
 
+const MIN_ZOOM_TO_LOAD = 6; // below this, a viewport bbox is too big to be a useful "stations here" list
+
 const state = {
   service: "FM",
-  usState: "",
+  genre: "",
   stations: [],
+  stateBboxes: {},
   selected: null,
   markerLayer: null,
   coverageLayer: null,
@@ -44,12 +47,10 @@ async function loadStates() {
   const res = await fetch(`${API}/meta/states`);
   const rows = await res.json();
   const sel = el("state-filter");
-  sel.innerHTML = "";
-  if (rows.length === 0) {
-    sel.innerHTML = '<option value="">No data imported yet</option>';
-    return;
-  }
+  sel.innerHTML = '<option value="">Jump to a state...</option>';
+  state.stateBboxes = {};
   for (const row of rows) {
+    if (row.bbox) state.stateBboxes[row.state] = row.bbox;
     const opt = document.createElement("option");
     opt.value = row.state;
     const fm = row.counts.FM || 0;
@@ -57,18 +58,53 @@ async function loadStates() {
     opt.textContent = `${row.state} (${fm} FM / ${am} AM)`;
     sel.appendChild(opt);
   }
-  state.usState = rows.some((r) => r.state === "CA") ? "CA" : rows[0].state;
-  sel.value = state.usState;
+}
+
+async function loadGenres() {
+  const params = new URLSearchParams({ service: state.service });
+  const res = await fetch(`${API}/meta/genres?${params}`);
+  const rows = await res.json();
+  const sel = el("genre-filter");
+  const previous = state.genre;
+  sel.innerHTML = '<option value="">All</option>';
+  for (const row of rows) {
+    const opt = document.createElement("option");
+    opt.value = row.genre;
+    opt.textContent = `${row.genre} (${row.count})`;
+    sel.appendChild(opt);
+  }
+  // Genre lists differ between FM/AM; keep the filter only if it still applies.
+  state.genre = rows.some((r) => r.genre === previous) ? previous : "";
+  sel.value = state.genre;
 }
 
 function freqLabel(s) {
   return s.service === "FM" ? `${s.frequency_mhz.toFixed(1)} MHz` : `${Math.round(s.frequency_mhz * 1000)} kHz`;
 }
 
-async function loadStations() {
+let viewportTimer = null;
+
+function scheduleViewportLoad() {
+  clearTimeout(viewportTimer);
+  viewportTimer = setTimeout(loadStationsInView, 300);
+}
+
+async function loadStationsInView() {
+  // A live search takes over the list/markers; don't let a map pan/zoom
+  // stomp on search results out from under the user.
+  if (el("station-search").value.trim().length >= 2) return;
+
   clearSelection();
-  const params = new URLSearchParams({ service: state.service });
-  if (state.usState) params.set("state", state.usState);
+  if (map.getZoom() < MIN_ZOOM_TO_LOAD) {
+    state.stations = [];
+    showStations([]);
+    el("station-count").textContent = "Zoom in to see stations here";
+    return;
+  }
+  const b = map.getBounds();
+  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
+  const params = new URLSearchParams({ service: state.service, bbox, limit: "1500" });
+  if (state.genre) params.set("genre", state.genre);
   const res = await fetch(`${API}/stations?${params}`);
   state.stations = await res.json();
   showStations(state.stations);
@@ -106,7 +142,8 @@ function renderList(stations) {
     const li = document.createElement("li");
     li.dataset.id = s.id;
     if (state.selected && state.selected.id === s.id) li.classList.add("selected");
-    li.innerHTML = `<span class="call">${s.callsign}</span><span class="freq">${freqLabel(s)} &middot; ${s.city || ""}, ${s.state || ""}</span>`;
+    const genreSuffix = s.genre ? ` &middot; ${s.genre}` : "";
+    li.innerHTML = `<span class="call">${s.callsign}</span><span class="freq">${freqLabel(s)} &middot; ${s.city || ""}, ${s.state || ""}${genreSuffix}</span>`;
     li.addEventListener("click", () => selectStation(s.id));
     listEl.appendChild(li);
   }
@@ -121,15 +158,16 @@ function onSearchInput(text) {
 
 async function runSearch(text) {
   if (text.length < 2) {
-    showStations(state.stations);
+    loadStationsInView();
     return;
   }
-  // Search nationwide (ignores the state filter): a station's city of
-  // license often isn't the market it actually serves, so restricting to
-  // the selected state can hide the exact station someone is looking for.
+  // Search nationwide (ignores the current map viewport): a station's city
+  // of license often isn't the market it actually serves, so restricting
+  // to what's on-screen can hide the exact station someone is looking for.
   const params = new URLSearchParams({ service: state.service, search: text, limit: "50" });
   const res = await fetch(`${API}/stations?${params}`);
   const results = await res.json();
+  state.stations = results;
   showStations(results);
 }
 
@@ -159,6 +197,7 @@ async function selectStation(id) {
   el("detail-sub").textContent = `${s.city || "?"}, ${s.state || "?"} &middot; ${s.licensee || "Unknown licensee"}`.replace("&middot;", "·");
 
   const rows = [
+    ["Genre", s.genre || "Unknown (no Wikidata match)"],
     ["Service", s.service],
     ["Class", s.class_ || "–"],
     ["Status", s.status || "–"],
@@ -214,26 +253,36 @@ async function showCoverage() {
 }
 
 function wireControls() {
-  el("service-filter").addEventListener("change", (e) => {
+  el("service-filter").addEventListener("change", async (e) => {
     state.service = e.target.value;
     el("station-search").value = "";
-    loadStations();
+    await loadGenres();
+    loadStationsInView();
+  });
+  el("genre-filter").addEventListener("change", (e) => {
+    state.genre = e.target.value;
+    el("station-search").value = "";
+    loadStationsInView();
   });
   el("state-filter").addEventListener("change", (e) => {
-    state.usState = e.target.value;
-    el("station-search").value = "";
-    loadStations();
+    const bbox = state.stateBboxes[e.target.value];
+    e.target.selectedIndex = 0; // it's a one-shot "jump to", not a sticky filter
+    if (!bbox) return;
+    const [minLon, minLat, maxLon, maxLat] = bbox;
+    map.fitBounds([[minLat, minLon], [maxLat, maxLon]]); // triggers moveend -> loadStationsInView
   });
   el("station-search").addEventListener("input", (e) => onSearchInput(e.target.value));
   el("detail-close").addEventListener("click", clearSelection);
   el("coverage-btn").addEventListener("click", showCoverage);
+  map.on("moveend", scheduleViewportLoad);
 }
 
 async function init() {
   populateThresholdSelect();
   wireControls();
   await loadStates();
-  await loadStations();
+  await loadGenres();
+  loadStationsInView();
 }
 
 init();

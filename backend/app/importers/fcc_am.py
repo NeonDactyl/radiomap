@@ -30,6 +30,12 @@ def parse_am_rows(text: str) -> list[dict]:
             continue
         if fields[2] != "AM":
             continue
+        if fields[11] != "US":
+            # The query tool also returns foreign border-coordination filings
+            # (mostly Mexico); a couple even carry a garbage 2-letter "state"
+            # that happens to collide with a real US state code, so this
+            # must be filtered before the state field is trusted at all.
+            continue
         try:
             lat = common.dms_to_decimal(fields[18], fields[19], fields[20], fields[21])
             lon = common.dms_to_decimal(fields[22], fields[23], fields[24], fields[25])

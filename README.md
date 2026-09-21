@@ -17,6 +17,8 @@ from tower location, transmit power, and terrain.
 - FM and AM use different physics (FM/VHF is line-of-sight + diffraction;
   AM/MW is a groundwave that mostly ignores terrain) -- see
   `backend/app/propagation/simple.py` for details and known limitations.
+- Attaches a programming genre/format where one exists in Wikidata (the FCC
+  itself doesn't track this -- it's not something it regulates).
 
 ## Architecture
 
@@ -65,6 +67,14 @@ Re-running an import updates existing stations in place (matched by FCC
 facility ID) rather than duplicating them, so it's safe to re-run
 periodically to pick up license changes.
 
+To attach genre/format data (from Wikidata, keyed by the same FCC facility
+ID -- see "Known limitations" below on coverage):
+
+```bash
+python -m app.importers.cli --genres --skip-stations   # genres only, no re-fetch from FCC
+python -m app.importers.cli --states CA --genres        # or do both in one run
+```
+
 ## Run it
 
 ```bash
@@ -80,13 +90,18 @@ take effect on browser refresh with no restart needed.
 
 ## Using it
 
-1. Pick FM or AM and a state in the top bar.
+1. Pick FM or AM (and optionally a genre) in the top bar, then pan/zoom the
+   map to the area you care about -- stations load for whatever's currently
+   on screen (zoom in past a point; a whole-country view is too broad to be
+   a useful station list). "Jump to" a state is a one-shot shortcut that
+   flies the map there; it doesn't pin the list to that state afterward.
 2. Click a station on the map or in the sidebar list to see its details
-   (power, HAAT, class, licensee, etc), or type into the search box to find
-   a station by call sign or city -- search looks nationwide regardless of
-   the selected state, because a station's FCC city of license often isn't
-   the market it actually serves (e.g. WJLI is licensed to Metropolis, IL
-   but serves Paducah, KY, so it won't show up under KY otherwise).
+   (power, HAAT, class, licensee, genre if known, etc), or type into the
+   search box to find a station by call sign or city -- search looks
+   nationwide regardless of the current map view, because a station's FCC
+   city of license often isn't the market it actually serves (e.g. WJLI is
+   licensed to Metropolis, IL but serves Paducah, KY, so panning to KY alone
+   won't surface it).
 3. Pick a signal-strength threshold and max radius, then "Show coverage"
    to draw the predicted coverage polygon. For AM stations you can also
    pick a ground-conductivity preset (affects groundwave range a lot).
@@ -137,4 +152,13 @@ wait a bit and retry.
   the place to do that.
 - Only primary FM/AM licensed stations are imported -- FM translators/
   boosters (FX/FL service codes) are skipped to avoid cluttering the map
-  with low-power rebroadcasters.
+  with low-power rebroadcasters. Non-US filings (the FCC query tool also
+  returns foreign border-coordination stations, mostly Mexico) are filtered
+  by `country == 'US'` -- a couple of them carried a garbage 2-letter
+  "state" value that happened to collide with a real US state code, so
+  this filter runs before the state field is trusted for anything.
+- **Genre/format coverage is partial (~16% of stations).** Wikidata's
+  "radio format" property (P415) is filled in for some US stations,
+  skewed toward larger/more notable ones -- there's no comprehensive free
+  source for this since the FCC doesn't track it. Most stations will show
+  "format unknown," which is an honest reflection of the data, not a bug.

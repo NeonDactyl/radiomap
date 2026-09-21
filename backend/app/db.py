@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS stations (
     lat             REAL NOT NULL,
     lon             REAL NOT NULL,
     licensee        TEXT,
+    genre           TEXT,                   -- from Wikidata "radio format" (P415); often NULL
     UNIQUE(facility_id, service)
 );
 
@@ -51,6 +52,17 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Lightweight migration for DBs created before a column existed.
+    SQLite has no "ADD COLUMN IF NOT EXISTS", so check pragma table_info.
+    """
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(stations)")}
+    if "genre" not in existing:
+        conn.execute("ALTER TABLE stations ADD COLUMN genre TEXT")
+        conn.commit()
 
 
 @contextmanager
