@@ -23,8 +23,9 @@ from tower location, transmit power, and terrain.
 - Attaches a programming genre/format where one exists in Wikidata (the FCC
   itself doesn't track this -- it's not something it regulates).
 - Caches computed coverage contours in SQLite (`coverage_cache`) so a
-  repeat request for the same station/params is instant, and can
-  precompute them ahead of time for many stations at once (see below).
+  repeat request for the same station/params is instant, and runs a
+  background seeder that slowly precomputes it for every station
+  automatically (see "Caching and precomputing coverage" below).
 
 ## Architecture
 
@@ -148,9 +149,26 @@ the status line); a request with different params computes fresh and adds
 a new cache row alongside the old one.
 
 To avoid paying the first-computation cost live (e.g. so the map feels
-instant for anyone browsing after setup), precompute coverage for many
-stations ahead of time using the same default parameters the live endpoint
-would pick:
+instant for anyone browsing after setup), precompute coverage ahead of
+time -- either automatically, or on demand:
+
+**Automatic**: `backend/app/background_seeder.py` starts a daemon thread
+with the server (set `RADIO_MAP_DISABLE_SEEDER=1` to turn it off) that
+slowly works through every imported station in the background, pacing
+itself (0.75s between FM attempts -- AM needs no throttling, it's pure
+math with no terrain dependency) so it doesn't hammer the free elevation
+APIs. Check progress at `GET /api/meta/seed-status`
+(`{running, total_stations, processed, newly_computed, already_cached,
+errors, current, caught_up}`). It idles 10 minutes between full passes so
+newly-imported stations eventually get picked up without a restart. Real
+regional data gaps (confirmed: parts of Alaska return no response at all
+from either elevation source) will show up as `errors`, not silently
+hang -- see "Known limitations" for the circuit-breaker that makes that
+possible instead of a multi-minute stall per bad station.
+
+**On demand**: the same underlying logic as a one-shot CLI run, useful
+for prioritizing specific states instead of waiting for the seeder to
+reach them:
 
 ```bash
 # from backend/, with the venv active
@@ -158,12 +176,12 @@ python -m app.importers.precompute_coverage --states CA
 python -m app.importers.precompute_coverage --service FM --states all --delay 0.5
 ```
 
-It skips anything already cached, so it's safe to re-run (e.g. after
-importing more states) without redoing work. `propagation/params.py` is
-the single place both the live endpoint and this script resolve default
-parameters from, so they can't drift apart -- a precomputed entry for a
-station is guaranteed to be what a live request for that station (with no
-overrides) would compute.
+Both skip anything already cached, so either is safe to re-run (e.g.
+after importing more states) without redoing work. `propagation/params.py`
+is the single place the live endpoint, the seeder, and the CLI script all
+resolve default parameters from, so none of them can drift apart -- a
+precomputed entry for a station is guaranteed to be what a live request
+for that station (with no overrides) would compute.
 
 Changing the propagation model's math doesn't automatically invalidate old
 cache rows -- the cache key includes `model.name`, not a hash of the code,
@@ -265,12 +283,19 @@ required for correctness.
   the wider average down). `SimpleFmModel._average_terrain_elevation_m()`
   now computes the real ring average from actual elevation data (8 radials
   x 9 samples between 1.5-10mi) and uses that as the AMSL reference instead.
-- **Elevation data depends on a free public API** (Open-Meteo, SRTM-based,
-  ~90m resolution). It's rate-limited; heavy use (e.g. computing coverage
-  for many stations back-to-back, or a nationwide import) may hit 429s.
-  Swapping to locally downloaded SRTM tiles would remove this dependency
-  and the rate-limit risk entirely -- `backend/app/geo/elevation.py` is
-  the place to do that.
+- **Elevation data depends on two free public APIs, and coverage gaps are
+  real, not just rate limits.** Primary is Open-Meteo (SRTM-based, ~90m
+  resolution; rate-limited under heavy use), falling back to USGS EPQS
+  (authoritative US 3DEP data, US-only). Confirmed directly: parts of
+  Alaska return no response at all from USGS EPQS, not just a slow one --
+  a genuine regional data gap, not something retrying harder fixes. The
+  fallback has a fast circuit breaker for this (try one point first; if
+  that fails, don't retry the other ~99 in the batch at full cost each) --
+  without it, a single bad batch took several minutes before giving up
+  instead of the ~10-30s it takes now to correctly report the area as
+  unavailable. Swapping to locally downloaded SRTM tiles would remove the
+  network dependency (and this failure mode) entirely -- `backend/app/geo/
+  elevation.py` is the place to do that.
 - Only primary FM/AM licensed stations are imported -- FM translators/
   boosters (FX/FL service codes) are skipped to avoid cluttering the map
   with low-power rebroadcasters. Non-US filings (the FCC query tool also
