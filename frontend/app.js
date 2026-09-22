@@ -197,10 +197,40 @@ async function runSearch(text) {
   showStations(results);
 }
 
+function parseUrlState() {
+  const params = new URLSearchParams(window.location.search);
+  const bboxParam = params.get("bbox");
+  let bbox = null;
+  if (bboxParam) {
+    const parts = bboxParam.split(",").map(Number);
+    if (parts.length === 4 && parts.every(Number.isFinite)) bbox = parts;
+  }
+  const stationId = Number(params.get("station"));
+  return { bbox, stationId: Number.isFinite(stationId) && stationId > 0 ? stationId : null };
+}
+
+// Keeps the current viewport and selected station reflected in the URL so
+// it's bookmarkable/shareable -- doesn't touch browser history (replaceState
+// only), since map panning fires this on every move and pushState would
+// flood the back button.
+function updateUrl() {
+  const b = map.getBounds();
+  const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((n) => n.toFixed(4)).join(",");
+  const params = new URLSearchParams(window.location.search);
+  params.set("bbox", bbox);
+  if (state.selected) {
+    params.set("station", state.selected.id);
+  } else {
+    params.delete("station");
+  }
+  history.replaceState(null, "", `${window.location.pathname}?${params}`);
+}
+
 function clearSelection() {
   state.selected = null;
   state.coverageLayer.clearLayers();
   el("detail-panel").classList.add("hidden");
+  updateUrl();
 }
 
 async function selectStation(id) {
@@ -238,6 +268,7 @@ async function selectStation(id) {
   el("conductivity-row").style.display = s.service === "AM" ? "flex" : "none";
   el("fm-model-row").style.display = s.service === "FM" ? "flex" : "none";
   el("coverage-status").textContent = "";
+  updateUrl();
 }
 
 async function showCoverage() {
@@ -318,6 +349,7 @@ function wireControls() {
   el("detail-close").addEventListener("click", clearSelection);
   el("coverage-btn").addEventListener("click", showCoverage);
   map.on("moveend", () => {
+    updateUrl();
     if (suppressNextMoveReload) {
       suppressNextMoveReload = false;
       return;
@@ -331,7 +363,21 @@ async function init() {
   wireControls();
   await loadStates();
   await loadGenres();
-  loadStationsInView();
+
+  const { bbox, stationId } = parseUrlState();
+  if (bbox) {
+    const [minLon, minLat, maxLon, maxLat] = bbox;
+    panWithoutTriggeringReload(() => map.fitBounds([[minLat, minLon], [maxLat, maxLon]]));
+  }
+  await loadStationsInView();
+  if (stationId) {
+    await selectStation(stationId);
+    // No bbox in the URL to anchor on (a bare station link) -- zoom to it
+    // instead of leaving the map at the default nationwide view.
+    if (!bbox && state.selected) {
+      panWithoutTriggeringReload(() => map.setView([state.selected.lat, state.selected.lon], 10));
+    }
+  }
 }
 
 init();

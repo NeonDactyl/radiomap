@@ -6,14 +6,14 @@ from fastapi.staticfiles import StaticFiles
 
 from . import background_seeder
 from .api.routes import router as api_router
-from .config import FRONTEND_DIR
+from .config import ALLOWED_ORIGINS, FRONTEND_DIR
 from .db import init_db
 
 app = FastAPI(title="Radio Map")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

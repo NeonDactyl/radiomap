@@ -117,7 +117,17 @@ uvicorn app.main:app --reload
 Then open **http://127.0.0.1:8000/**. The frontend is served directly by
 the same FastAPI process (no separate frontend server or build step) --
 `--reload` picks up backend code changes; frontend HTML/CSS/JS changes
-take effect on browser refresh with no restart needed.
+take effect on browser refresh with no restart needed. The frontend always
+calls the API through a relative `/api` path, so this same-origin setup
+works unmodified under any domain a reverse proxy puts in front of it. If
+you ever need the API reachable from a *different* origin than the one
+serving it (a local frontend pointed at a deployed API, a preview URL,
+etc), set `RADIO_MAP_ALLOWED_ORIGINS` (comma-separated) before starting
+uvicorn -- unset, it allows any origin, which is fine for local dev:
+
+```bash
+RADIO_MAP_ALLOWED_ORIGINS=https://radiomap.example.com uvicorn app.main:app
+```
 
 ## Using it
 
@@ -146,6 +156,13 @@ take effect on browser refresh with no restart needed.
    because a single fixed radius either clips a powerful station's real
    coverage edge or wastes time searching way past a weak one's. Set it
    manually only if you want a specific search cutoff.
+
+The current map view and selected station are kept in the page URL
+(`?bbox=...&station=...`), updated via `history.replaceState` as you pan
+or select -- so the URL is always a bookmarkable/shareable link back to
+what's currently on screen, and reloading or opening it fresh restores
+that view (and re-selects the station, if any) without touching browser
+history on every pan.
 
 Terrain lookups download USGS DEM tiles on first use per area (see
 `backend/app/geo/local_dem.py`) and read them locally from then on, so

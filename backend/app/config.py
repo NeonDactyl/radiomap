@@ -1,8 +1,23 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
+
+# Public origin(s) this app is served from in production, e.g.
+# "https://radiomap.example.com" -- comma-separated if there's more than one
+# (an apex + www, say). The frontend always calls the API with a relative
+# path (see frontend/app.js's `API` const), so same-origin deployment needs
+# no CORS at all; this only matters if the API is ever reached from a
+# different origin than the one serving it (a local frontend pointed at a
+# deployed API, a preview URL, etc). Unset (the default) allows any origin,
+# which is fine for local dev.
+ALLOWED_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("RADIO_MAP_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+] or ["*"]
 
 DB_PATH = DATA_DIR / "stations.db"
 
