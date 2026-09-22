@@ -11,12 +11,15 @@ from tower location, transmit power, and terrain.
 - Looks up real terrain elevation along the path from each tower outward
   (via a free SRTM-based elevation API), so hills and mountains actually
   block or extend a station's reach.
-- Predicts a coverage contour per station using free-space path loss plus
-  terrain diffraction (line-of-sight blocking), rendered as a polygon on
-  a Leaflet map.
-- FM and AM use different physics (FM/VHF is line-of-sight + diffraction;
-  AM/MW is a groundwave that mostly ignores terrain) -- see
-  `backend/app/propagation/simple.py` for details and known limitations.
+- Predicts a coverage contour per station, rendered as a polygon on a
+  Leaflet map. FM uses the FCC's own real F(50,50) field-strength curve
+  (transcribed from the FCC's own reference implementation -- see
+  `backend/app/propagation/fcc_curves.py`) as the baseline, with real
+  single-direction terrain obstruction (actual DEM-based knife-edge
+  diffraction) layered on top so a mountain range on one side of a station
+  comes out shorter than the open side. AM uses a simpler groundwave
+  approximation. See `backend/app/propagation/simple.py` for details and
+  known limitations of both.
 - Attaches a programming genre/format where one exists in Wikidata (the FCC
   itself doesn't track this -- it's not something it regulates).
 - Caches computed coverage contours in SQLite (`coverage_cache`) so a
@@ -38,9 +41,10 @@ frontend/           Leaflet map, plain HTML/CSS/JS, no build step
 
 The propagation model is behind a small interface
 (`propagation/base.py: PropagationModel`) specifically so the v1 "simple"
-model (free-space + single-knife-edge diffraction) can later be swapped
-for a full Longley-Rice / ITM implementation without touching the API or
-frontend. See the "Known limitations / next steps" section below.
+model (FCC curve baseline + single-knife-edge diffraction for FM;
+groundwave approximation for AM) can later be swapped for a full
+Longley-Rice / ITM implementation without touching the API or frontend.
+See the "Known limitations / next steps" section below.
 
 ## Setup
 
@@ -174,40 +178,48 @@ required for correctness.
 
 ## Known limitations / next steps
 
-- **FM beyond-horizon over-prediction (fixed).** Was: this model checked
-  each terrain sample against a straight line adjusted for earth-curvature
-  bulge and applied loss only for the single worst obstruction found --
-  with no separate term for the continuous extra attenuation real
-  propagation experiences beyond the geometric radio horizon even with
-  zero terrain relief. Measured effect: for KWBL-FM (Denver, 100kW, 408m
-  HAAT) due north toward Cheyenne, WY (~170km, open terrain), the model
-  predicted 66 dBu -- above even radio-locator.com's most permissive
-  "fringe" threshold (40 dBu), which its own map doesn't reach at that
-  distance. Fixed by adding the ITU-R P.526-14 §3.1.1 smooth-earth
-  diffraction formula (equations 13-18b; ground conductivity/polarization
-  factor β taken as 1, which the Recommendation gives as exact for
-  horizontal polarization at all frequencies) as a second loss term beyond
-  `smooth_earth_radio_horizon_km()`, summed with (not max()'d against) the
-  existing terrain-specific knife-edge loss -- max() was tried first and
-  discarded because it let the horizon term completely swamp real,
-  already-confirmed mountain blocking past ~100km, making a mountain-facing
-  and a clear bearing converge to identical numbers. Summing does mean the
-  two terms likely double-count some shared geometry near the horizon
-  (they're not perfectly independent), which is a known imprecision of this
-  approximation, not a bug -- see `base.py: smooth_earth_diffraction_loss_db`
-  and `tests/test_smooth_earth_diffraction.py` for the derivation, sourced
-  formula, and the regression test pinned to the KWBL/Cheyenne measurement.
-  This is still a simplified model, not the FCC's actual F(50,50) curves
-  (47 CFR 73.313/73.699, empirically measured, not purely physics-derived)
-  -- a real next step if more accuracy is needed, since those aren't a
-  closed-form formula and would need a verified digitized source.
-- **Propagation model is deliberately simple (v1) in general.** FM/VHF
-  coverage uses free-space path loss plus a single worst-case knife-edge
-  diffraction obstruction per path -- a legitimate but simplified physical
-  model. It does not model multiple/cascaded diffraction or troposcatter.
-  The natural next step is a full **Longley-Rice / ITM** implementation
-  behind the same `PropagationModel` interface -- see
-  `backend/app/propagation/base.py` and `simple.py` for the seam.
+- **FM beyond-horizon over-prediction (fixed, twice).** Originally: this
+  model checked each terrain sample against a straight line adjusted for
+  earth-curvature bulge and penalized only the single worst obstruction
+  found, with nothing accounting for the continuous extra attenuation real
+  propagation experiences beyond the radio horizon even over zero terrain
+  relief. Measured for KWBL-FM (Denver, 100kW, 408m HAAT) due north toward
+  Cheyenne, WY (~170km, open terrain): predicted 66 dBu, above even
+  radio-locator.com's most permissive "fringe" threshold (40 dBu), which
+  its own map doesn't reach that far. First fix added an ITU-R P.526
+  smooth-earth diffraction term (still in `base.py` and covered by
+  `tests/test_smooth_earth_diffraction.py`, though no longer used by
+  `SimpleFmModel` -- see below). That was superseded by a better fix: the
+  FCC's actual F(50,50) field-strength curve (see next bullet) replaced
+  the free-space+smooth-earth-diffraction baseline entirely, since it's
+  the real, empirically-measured data rather than a physics approximation
+  of it. Real terrain-specific knife-edge diffraction is layered on top of
+  that curve, unchanged in approach. Current result for the same
+  reference point: 31.8 dBu at Cheyenne, below the fringe threshold.
+- **FM propagation baseline is the FCC's own F(50,50) curve, not a derived
+  approximation.** `backend/app/propagation/fcc_curves.py` embeds data
+  transcribed (programmatically, not by hand) from the FCC's own
+  reference Fortran implementation of 47 CFR 73.333/73.699 -- see that
+  file's docstring for exact provenance and a link. Two honest caveats:
+  (1) the FCC's tool interpolates this table with a specific 1974 Akima
+  bivariate algorithm; porting that exact ~700-line routine (dense,
+  GOTO-heavy, using Fortran `EQUIVALENCE` memory aliasing -- explicitly
+  flagged by the code's own distributor as too risky to hand-translate)
+  seemed like a worse trade than using the same real data with standard
+  bilinear interpolation, which is what this does instead -- a deliberate,
+  documented difference from the FCC's exact algorithm, not a full
+  reproduction of it. (2) The FCC curve itself is direction-agnostic (a
+  function of distance and HAAT only) -- exactly like an official FCC
+  protected-service contour, which is a simple per-radial distance, not a
+  terrain-aware shape. Real single-direction blocking (why a station
+  reaches further over open plains than into a mountain range) still
+  comes entirely from the separate real-terrain knife-edge diffraction
+  layered on top, which only checks the single worst obstruction per path
+  and doesn't model multiple/cascaded diffraction or troposcatter. The
+  natural next step for more accuracy than either piece offers is a full
+  **Longley-Rice / ITM** implementation behind the same `PropagationModel`
+  interface -- see `backend/app/propagation/base.py` and `simple.py` for
+  the seam.
 - **Coverage boundary per bearing is the last point before a *sustained*
   drop below threshold** (the next couple of samples also below it) --
   not the first drop, and not the farthest qualifying point anywhere on

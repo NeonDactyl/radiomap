@@ -1,10 +1,17 @@
 """v1 propagation models.
 
-FM/VHF: free-space path loss plus single-knife-edge terrain diffraction
-along the tower-to-receiver path, with earth curvature accounted for via
-the standard k=4/3 effective-earth-radius approximation. Tree canopy (when
-a real CanopyProvider is wired in -- see geo/landcover.py) adds to the
-terrain height used for the obstruction check.
+FM/VHF: the FCC's own real F(50,50) field-strength curve (see
+fcc_curves.py -- transcribed from the FCC's own reference implementation,
+not derived) gives the base field strength for the station's distance and
+HAAT. That curve is direction-agnostic by construction (matching how an
+official FCC protected-service contour is itself a simple per-radial
+distance, not terrain-aware), so real single-direction obstructions --
+the reason a station reaches further over open plains than into a
+mountain range -- are layered on top as a separate knife-edge diffraction
+loss against actual DEM terrain data, with earth curvature accounted for
+via the standard k=4/3 effective-earth-radius approximation. Tree canopy
+(when a real CanopyProvider is wired in -- see geo/landcover.py) adds to
+the terrain height used for that obstruction check.
 
 AM/MW: groundwave propagation is a genuinely different physical mechanism
 (a surface wave hugging the curved earth, governed by ground conductivity,
@@ -23,6 +30,7 @@ touching the API layer or the coverage-contour marching logic.
 """
 import math
 
+from . import fcc_curves
 from .base import (
     PropagationModel,
     Station,
@@ -30,13 +38,11 @@ from .base import (
     earth_curvature_bulge_m,
     free_space_field_strength_dbu,
     knife_edge_diffraction_loss_db,
-    smooth_earth_diffraction_loss_db,
-    smooth_earth_radio_horizon_km,
 )
 
 
 class SimpleFmModel(PropagationModel):
-    name = "simple_fm_v5"  # bump this string whenever the math below changes -- see coverage_cache
+    name = "simple_fm_v6"  # bump this string whenever the math below changes -- see coverage_cache
 
     default_haat_m = 30.0
     receiver_height_m = 9.0  # ~30ft, the FCC's standard FM receive height
@@ -94,15 +100,19 @@ class SimpleFmModel(PropagationModel):
         haat = station.haat_m if station.haat_m and station.haat_m > 0 else self.default_haat_m
         tx_height_amsl = self._average_terrain_elevation_m(station) + haat
         erp = station.erp_kw if station.erp_kw and station.erp_kw > 0 else 0.05
-        radio_horizon_km = smooth_earth_radio_horizon_km(haat, self.receiver_height_m)
 
         results = []
         for k in range(1, len(all_distances)):
             d_rx = all_distances[k]
             rx_height_amsl = elevations[k] + self.receiver_height_m
 
-            # Actual-terrain knife-edge check: catches real hills/mountains
-            # poking above the line-of-sight-minus-earth-bulge line.
+            # Real-terrain knife-edge check: catches actual hills/mountains
+            # poking above the line-of-sight-minus-earth-bulge line. This is
+            # what makes a mountain-facing bearing come out shorter than an
+            # open-plains one -- the FCC curve baseline below is the same in
+            # every direction for a given distance, by construction (it's a
+            # function of distance and HAAT only, same as an official FCC
+            # protected-service contour).
             terrain_diffraction_loss = 0.0
             for j in range(1, k):
                 d1 = all_distances[j]
@@ -117,30 +127,8 @@ class SimpleFmModel(PropagationModel):
                 if loss > terrain_diffraction_loss:
                     terrain_diffraction_loss = loss
 
-            # Smooth-earth diffraction: catches the case actual-terrain
-            # knife-edge checking alone misses -- open/flat paths, where no
-            # DEM sample ever pokes above the LOS-minus-bulge line, but the
-            # receiver is still beyond the geometric radio horizon (the
-            # curved earth itself is the obstruction at that point, not any
-            # single terrain feature). See smooth_earth_diffraction_loss_db.
-            smooth_earth_loss = (
-                smooth_earth_diffraction_loss_db(haat, self.receiver_height_m, d_rx, station.frequency_mhz)
-                if d_rx > radio_horizon_km else 0.0
-            )
-
-            # Summed, not max()'d: these represent loss from two different
-            # parts of the same path (a specific real obstruction, plus
-            # continued beyond-horizon spreading past it), not two competing
-            # estimates of the same thing. max() was tried first and
-            # discarded -- it let the horizon-driven term completely swamp
-            # real, already-confirmed mountain blocking past ~100km, making
-            # a station's mountain-facing and open-plains bearings converge
-            # to identical numbers well before either search radius was
-            # reached (visibly: a mountain-blocked bearing and a clear one
-            # producing the exact same field strength from 110km onward).
-            diffraction_loss = terrain_diffraction_loss + smooth_earth_loss
-            free_space = free_space_field_strength_dbu(erp, d_rx)
-            results.append(free_space - diffraction_loss)
+            baseline = fcc_curves.field_strength_dbu_per_kw(d_rx, haat) + 10 * math.log10(erp)
+            results.append(baseline - terrain_diffraction_loss)
         return results
 
 
