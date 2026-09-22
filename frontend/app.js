@@ -83,10 +83,24 @@ function freqLabel(s) {
 }
 
 let viewportTimer = null;
+let suppressNextMoveReload = false;
 
 function scheduleViewportLoad() {
   clearTimeout(viewportTimer);
   viewportTimer = setTimeout(loadStationsInView, 300);
+}
+
+// selectStation() pans the map to center the newly selected station, which
+// fires the same "moveend" event a real user pan does. Without this, that
+// self-triggered move would immediately reload the viewport and clear the
+// selection it just made (the station would flash selected then deselect).
+function panWithoutTriggeringReload(fn) {
+  suppressNextMoveReload = true;
+  fn();
+  // Safety net: if the pan doesn't actually move the map (station already
+  // centered), moveend never fires to consume the flag -- don't leave it
+  // stuck suppressing a later, genuine user pan.
+  setTimeout(() => { suppressNextMoveReload = false; }, 1000);
 }
 
 async function loadStationsInView() {
@@ -188,7 +202,7 @@ async function selectStation(id) {
     li.classList.toggle("selected", Number(li.dataset.id) === id);
   });
 
-  map.panTo([s.lat, s.lon]);
+  panWithoutTriggeringReload(() => map.panTo([s.lat, s.lon]));
   const marker = state.markersById.get(id);
   if (marker) marker.openTooltip();
 
@@ -274,7 +288,13 @@ function wireControls() {
   el("station-search").addEventListener("input", (e) => onSearchInput(e.target.value));
   el("detail-close").addEventListener("click", clearSelection);
   el("coverage-btn").addEventListener("click", showCoverage);
-  map.on("moveend", scheduleViewportLoad);
+  map.on("moveend", () => {
+    if (suppressNextMoveReload) {
+      suppressNextMoveReload = false;
+      return;
+    }
+    scheduleViewportLoad();
+  });
 }
 
 async function init() {
