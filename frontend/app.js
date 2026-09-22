@@ -256,7 +256,7 @@ async function showCoverage() {
       fillColor: color,
       fillOpacity: 0.18,
     }).addTo(state.coverageLayer);
-    map.fitBounds(poly.getBounds(), { padding: [30, 30] });
+    panWithoutTriggeringReload(() => map.fitBounds(poly.getBounds(), { padding: [30, 30] }));
     el("coverage-status").textContent = `Model: ${data.model} · threshold ${data.threshold_dbu} dBu`;
   } catch (err) {
     el("coverage-status").textContent = err.message || "Failed to compute coverage.";
