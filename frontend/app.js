@@ -1,11 +1,23 @@
 const API = "/api";
 
-const THRESHOLD_PRESETS = [
-  { label: "60 dBu — city grade (strong, reliable)", value: 60 },
-  { label: "54 dBu — normally protected service", value: 54 },
-  { label: "48 dBu — usable in quiet areas", value: 48 },
-  { label: "40 dBu — fringe / weak-signal edge", value: 40 },
-];
+// Matches radio-locator.com's published definitions, not an FCC standard,
+// so contours here are comparable to what people are used to seeing there:
+// FM local/distant/fringe = 60/50/40 dBu. AM's are given as mV/m of
+// horizontal groundwave (2.5/0.5/0.15); converted to dBu here to match the
+// unit the rest of this app (and the backend) uses throughout.
+const THRESHOLD_PRESETS = {
+  FM: [
+    { key: "local", label: "Local (60 dBu) — strong, reliable on any radio", value: 60 },
+    { key: "distant", label: "Distant (50 dBu) — needs a good radio/antenna", value: 50 },
+    { key: "fringe", label: "Fringe (40 dBu) — very weak, may not be usable", value: 40 },
+  ],
+  AM: [
+    { key: "local", label: "Local (68 dBu / 2.5 mV/m) — strong, reliable", value: 68 },
+    { key: "distant", label: "Distant (54 dBu / 0.5 mV/m) — needs a good radio", value: 54 },
+    { key: "fringe", label: "Fringe (43.5 dBu / 0.15 mV/m) — very weak", value: 43.5 },
+  ],
+};
+const DEFAULT_THRESHOLD_KEY = "distant";
 
 const MIN_ZOOM_TO_LOAD = 6; // below this, a viewport bbox is too big to be a useful "stations here" list
 
@@ -31,14 +43,14 @@ state.coverageLayer = L.layerGroup().addTo(map);
 
 const el = (id) => document.getElementById(id);
 
-function populateThresholdSelect() {
+function populateThresholdSelect(service) {
   const sel = el("threshold-select");
   sel.innerHTML = "";
-  for (const p of THRESHOLD_PRESETS) {
+  for (const p of THRESHOLD_PRESETS[service]) {
     const opt = document.createElement("option");
     opt.value = p.value;
     opt.textContent = p.label;
-    if (p.value === 54) opt.selected = true;
+    if (p.key === DEFAULT_THRESHOLD_KEY) opt.selected = true;
     sel.appendChild(opt);
   }
 }
@@ -265,8 +277,9 @@ async function showCoverage() {
       fillOpacity: 0.18,
     }).addTo(state.coverageLayer);
     panWithoutTriggeringReload(() => map.fitBounds(poly.getBounds(), { padding: [30, 30] }));
+    const cacheNote = data.cached ? " (cached)" : "";
     el("coverage-status").textContent =
-      `Model: ${data.model} · threshold ${data.threshold_dbu} dBu · searched out to ${Math.round(data.max_radius_km)} km`;
+      `Model: ${data.model} · threshold ${data.threshold_dbu} dBu · searched out to ${Math.round(data.max_radius_km)} km${cacheNote}`;
   } catch (err) {
     el("coverage-status").textContent = err.message || "Failed to compute coverage.";
     console.error(err);
@@ -279,6 +292,7 @@ function wireControls() {
   el("service-filter").addEventListener("change", async (e) => {
     state.service = e.target.value;
     el("station-search").value = "";
+    populateThresholdSelect(state.service);
     await loadGenres();
     loadStationsInView();
   });
@@ -307,7 +321,7 @@ function wireControls() {
 }
 
 async function init() {
-  populateThresholdSelect();
+  populateThresholdSelect(state.service);
   wireControls();
   await loadStates();
   await loadGenres();

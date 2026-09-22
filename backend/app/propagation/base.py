@@ -155,6 +155,9 @@ class PropagationModel(ABC):
                 all_points.extend(destination_point(station.lat, station.lon, bearing, d) for d in distances)
             self.elevation.get_elevations(all_points)
 
+        # This method (and free_space_field_strength_dbu etc. above) is shared
+        # by every model, so a change here needs every model's `name` in
+        # simple.py bumped too -- see coverage_cache in the README.
         sustain_samples = 2  # tolerate a single-sample dip; require it to persist to count as the boundary
 
         contour = []

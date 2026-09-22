@@ -19,6 +19,9 @@ from tower location, transmit power, and terrain.
   `backend/app/propagation/simple.py` for details and known limitations.
 - Attaches a programming genre/format where one exists in Wikidata (the FCC
   itself doesn't track this -- it's not something it regulates).
+- Caches computed coverage contours in SQLite (`coverage_cache`) so a
+  repeat request for the same station/params is instant, and can
+  precompute them ahead of time for many stations at once (see below).
 
 ## Architecture
 
@@ -103,13 +106,17 @@ take effect on browser refresh with no restart needed.
    licensed to Metropolis, IL but serves Paducah, KY, so panning to KY alone
    won't surface it).
 3. Pick a signal-strength threshold, then "Show coverage" to draw the
-   predicted coverage polygon. For AM stations you can also pick a
-   ground-conductivity preset (affects groundwave range a lot). Max radius
-   is left on "Auto" by default -- it's picked per station from actual
-   ERP/HAAT (FM) or solved directly from the groundwave model (AM), because
-   a single fixed radius either clips a powerful station's real coverage
-   edge or wastes time searching way past a weak one's. Set it manually
-   only if you want a specific search cutoff.
+   predicted coverage polygon. Thresholds are labeled **Local / Distant /
+   Fringe**, matching radio-locator.com's published definitions (60/50/40
+   dBu for FM; 2.5/0.5/0.15 mV/m of groundwave for AM, converted to dBu) --
+   not an FCC standard, chosen so contours here are comparable to what
+   people already expect from that site. For AM stations you can also pick
+   a ground-conductivity preset (affects groundwave range a lot). Max
+   radius is left on "Auto" by default -- it's picked per station from
+   actual ERP/HAAT (FM) or solved directly from the groundwave model (AM),
+   because a single fixed radius either clips a powerful station's real
+   coverage edge or wastes time searching way past a weak one's. Set it
+   manually only if you want a specific search cutoff.
 
 Terrain lookups hit a free public elevation API (Open-Meteo) on first use
 per area and are cached afterward in `elevation_cache` inside the same
@@ -120,21 +127,84 @@ falls back to the USGS Elevation Point Query Service (US-only, authoritative
 if *both* sources are unavailable you'll see an error in the coverage panel
 -- wait a bit and retry. A cold "Show coverage" click on a new, weak/local
 station can take ~5-15 seconds; a high-power/tall-tower FM station searches
-a much wider radius (real 54 dBu contours for a 100kW station can be
-150-250km out) and can take up to ~40 seconds -- most of that is the
-per-bearing terrain lookups, not the propagation math itself.
+a much wider radius (real 60 dBu contours for a 100kW station can be over
+100km out) and can take up to ~40 seconds -- most of that is the per-bearing
+terrain lookups, not the propagation math itself. See "Caching and
+precomputing coverage" below for how to avoid paying that cost live.
+
+## Caching and precomputing coverage
+
+Every computed coverage contour is cached in SQLite (`coverage_cache`),
+keyed by station + every parameter that affects the result (model,
+threshold, radius, step, bearings, AM conductivity). A live request for
+params that match an existing cache row returns instantly (the API
+response has a `cached: true/false` field, and the UI shows "(cached)" in
+the status line); a request with different params computes fresh and adds
+a new cache row alongside the old one.
+
+To avoid paying the first-computation cost live (e.g. so the map feels
+instant for anyone browsing after setup), precompute coverage for many
+stations ahead of time using the same default parameters the live endpoint
+would pick:
+
+```bash
+# from backend/, with the venv active
+python -m app.importers.precompute_coverage --states CA
+python -m app.importers.precompute_coverage --service FM --states all --delay 0.5
+```
+
+It skips anything already cached, so it's safe to re-run (e.g. after
+importing more states) without redoing work. `propagation/params.py` is
+the single place both the live endpoint and this script resolve default
+parameters from, so they can't drift apart -- a precomputed entry for a
+station is guaranteed to be what a live request for that station (with no
+overrides) would compute.
+
+Changing the propagation model's math doesn't automatically invalidate old
+cache rows -- the cache key includes `model.name`, not a hash of the code,
+so a stale row from before a math change would otherwise look identical to
+a fresh one. `SimpleFmModel`/`SimpleAmModel` version their `name` (e.g.
+`simple_fm_v2`) specifically so this can't happen silently: bump the
+version string in `propagation/simple.py` whenever you change the actual
+calculations (not just default parameters), and old rows simply become
+unreachable dead entries rather than wrong answers -- `DELETE FROM
+coverage_cache;` cleans those up if you want the space back, but isn't
+required for correctness.
 
 ## Known limitations / next steps
 
-- **Propagation model is deliberately simple (v1).** FM/VHF coverage uses
-  free-space path loss plus a single worst-case knife-edge diffraction
-  obstruction per path -- a legitimate but simplified physical model. It
-  does not model multiple diffraction, troposcatter, or receiver noise
-  floor, so very weak stations over flat/open terrain can show
-  unrealistically large contours at low dBu thresholds (raise the
-  threshold to compensate). The natural next step is a full **Longley-Rice
-  / ITM** implementation behind the same `PropagationModel` interface --
-  see `backend/app/propagation/base.py` and `simple.py` for the seam.
+- **FM coverage over long, open (non-mountainous) paths is measurably
+  over-predicted -- this is the single biggest known accuracy gap.**
+  Direct comparison against radio-locator.com for KWBL-FM (Denver, 100kW,
+  408m HAAT): due north toward Cheyenne, WY (~170km, flat terrain, no
+  obstruction), this model predicts 66 dBu -- above even radio-locator's
+  most permissive "fringe" threshold (40 dBu) -- and stays above 40 dBu out
+  past 300km. Real-world reception (and radio-locator's fringe contour)
+  doesn't reach Cheyenne at all. This isn't a threshold-labeling issue (the
+  thresholds are now radio-locator's own published values, see "Using it"
+  above); the model is genuinely too optimistic at long range over clear
+  terrain. Cause: this v1 model checks each terrain sample against a
+  straight line adjusted for earth-curvature bulge and applies loss only
+  for the single worst obstruction found (see below) -- it has no separate
+  term for the continuous extra attenuation that real propagation
+  experiences beyond the geometric radio horizon even with zero terrain
+  relief (smooth-earth diffraction, atmospheric statistics baked into the
+  FCC's real F(50,50) curves, etc.). The mountain-blocking physics is
+  correctly differential (confirmed: KWBL's Front-Range bearings compute
+  substantially shorter than its plains bearings), so this only shows up
+  as an absolute over-prediction on the *open* side of a contour, not as a
+  wrong-shaped one. Fixing this properly means either implementing the
+  FCC's actual F(50,50)/F(50,10) propagation curves (47 CFR 73.313/73.699)
+  or a real smooth-earth-diffraction term -- both nontrivial enough that
+  they're better done as a deliberate follow-up with a verified data
+  source than guessed at.
+- **Propagation model is deliberately simple (v1) in general.** FM/VHF
+  coverage uses free-space path loss plus a single worst-case knife-edge
+  diffraction obstruction per path -- a legitimate but simplified physical
+  model. It does not model multiple/cascaded diffraction or troposcatter.
+  The natural next step is a full **Longley-Rice / ITM** implementation
+  behind the same `PropagationModel` interface -- see
+  `backend/app/propagation/base.py` and `simple.py` for the seam.
 - **Coverage boundary per bearing is the last point before a *sustained*
   drop below threshold** (the next couple of samples also below it) --
   not the first drop, and not the farthest qualifying point anywhere on

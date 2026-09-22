@@ -34,7 +34,7 @@ from .base import (
 
 
 class SimpleFmModel(PropagationModel):
-    name = "simple_fm"
+    name = "simple_fm_v2"  # bump this string whenever the math below changes -- see coverage_cache
 
     default_haat_m = 30.0
     receiver_height_m = 9.0  # ~30ft, the FCC's standard FM receive height
@@ -82,7 +82,7 @@ class SimpleFmModel(PropagationModel):
 
 
 class SimpleAmModel(PropagationModel):
-    name = "simple_am"
+    name = "simple_am_v2"  # bump this string whenever the math below changes -- see coverage_cache
     uses_terrain = False
 
     # Calibration reference: ~54 dBu (0.5 mV/m) contour at 60km for a 1kW

@@ -34,3 +34,4 @@ class CoverageResponse(BaseModel):
     threshold_dbu: float
     max_radius_km: float
     contour: list[list[float]]  # [[lat, lon], ...]
+    cached: bool = False

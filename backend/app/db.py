@@ -39,6 +39,23 @@ CREATE TABLE IF NOT EXISTS elevation_cache (
     elevation_m REAL NOT NULL,
     PRIMARY KEY (lat_r, lon_r)
 );
+
+-- Precomputed/cached coverage contours, keyed by every parameter that
+-- affects the result. Params are rounded before use as a key (see
+-- propagation/params.py) so float text-vs-query-param round-tripping can't
+-- cause spurious cache misses.
+CREATE TABLE IF NOT EXISTS coverage_cache (
+    station_id                INTEGER NOT NULL,
+    model                     TEXT NOT NULL,
+    threshold_dbu             REAL NOT NULL,
+    max_radius_km             REAL NOT NULL,
+    step_km                   REAL NOT NULL,
+    n_bearings                INTEGER NOT NULL,
+    ground_conductivity_mmho  REAL NOT NULL DEFAULT 0,
+    contour_json              TEXT NOT NULL,
+    computed_at               TEXT NOT NULL,
+    PRIMARY KEY (station_id, model, threshold_dbu, max_radius_km, step_km, n_bearings, ground_conductivity_mmho)
+);
 """
 
 

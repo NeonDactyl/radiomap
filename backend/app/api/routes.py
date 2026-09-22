@@ -2,12 +2,14 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
 
+from .. import coverage_cache
 from ..db import get_conn
 from ..geo.elevation import ElevationUnavailable, elevation_provider
 from ..geo.landcover import canopy_provider
 from ..models import CoverageResponse, StationDetail, StationOut
 from ..propagation.base import Station
-from ..propagation.simple import get_model, suggest_am_search_radius_km, suggest_fm_search_radius_km
+from ..propagation.params import resolve_coverage_params
+from ..propagation.simple import get_model
 
 router = APIRouter(prefix="/api")
 
@@ -177,9 +179,10 @@ def get_coverage(
     station_id: int,
     threshold_dbu: float | None = None,
     max_radius_km: float | None = None,
-    n_bearings: int = Query(24, ge=8, le=72),
+    n_bearings: int | None = Query(None, ge=8, le=90),
     step_km: float | None = None,
     ground_conductivity_mmho: float = Query(5.0, gt=0, description="AM only: 1=poor/rocky, 5=average, 15=rich soil"),
+    refresh: bool = Query(False, description="Recompute even if a cached contour exists for these exact params"),
 ):
     conn = get_conn()
     try:
@@ -203,41 +206,34 @@ def get_coverage(
         directional=bool(row["directional"]),
     )
 
-    default_threshold = 54.0
-    threshold_dbu = threshold_dbu if threshold_dbu is not None else default_threshold
-
-    if station.service == "FM":
-        default_radius = suggest_fm_search_radius_km(station.erp_kw, station.haat_m)
-    else:
-        default_radius = suggest_am_search_radius_km(
-            station.erp_kw, station.frequency_mhz, ground_conductivity_mmho, threshold_dbu,
-        )
-    max_radius_km = max_radius_km if max_radius_km is not None else default_radius
-    # Keep the number of samples per bearing (and thus compute/elevation-call
-    # cost) roughly constant regardless of how far the search radius reaches.
-    default_step = max(2.0, min(max_radius_km / 35.0, 8.0))
-    step_km = step_km if step_km is not None else default_step
-
-    model = get_model(
-        station.service, elevation_provider, canopy_provider,
-        ground_conductivity_mmho=ground_conductivity_mmho,
+    params = resolve_coverage_params(
+        station, threshold_dbu=threshold_dbu, max_radius_km=max_radius_km,
+        step_km=step_km, n_bearings=n_bearings, ground_conductivity_mmho=ground_conductivity_mmho,
     )
-    try:
-        contour = model.coverage_contour(
-            station, threshold_dbu=threshold_dbu, max_radius_km=max_radius_km,
-            step_km=step_km, n_bearings=n_bearings,
-        )
-    except ElevationUnavailable as exc:
-        raise HTTPException(
-            503,
-            f"Elevation data service is temporarily unavailable/rate-limited ({exc}). "
-            "Try again shortly, or retry with fewer bearings / a larger step size.",
-        )
+    model = get_model(station.service, elevation_provider, canopy_provider, **params)
+
+    contour = None if refresh else coverage_cache.lookup(station_id, model.name, params)
+    cached = contour is not None
+    if not cached:
+        try:
+            contour = model.coverage_contour(
+                station, threshold_dbu=params["threshold_dbu"], max_radius_km=params["max_radius_km"],
+                step_km=params["step_km"], n_bearings=params["n_bearings"],
+            )
+        except ElevationUnavailable as exc:
+            raise HTTPException(
+                503,
+                f"Elevation data service is temporarily unavailable/rate-limited ({exc}). "
+                "Try again shortly, or retry with fewer bearings / a larger step size.",
+            )
+        contour = [[lat, lon] for lat, lon in contour]
+        coverage_cache.store(station_id, model.name, params, contour)
 
     return CoverageResponse(
         station_id=station_id,
         model=model.name,
-        threshold_dbu=threshold_dbu,
-        max_radius_km=max_radius_km,
-        contour=[[lat, lon] for lat, lon in contour],
+        threshold_dbu=params["threshold_dbu"],
+        max_radius_km=params["max_radius_km"],
+        contour=contour,
+        cached=cached,
     )
