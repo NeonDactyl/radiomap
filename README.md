@@ -201,6 +201,42 @@ terrain effect" from "this specific path's real terrain effect" with the
 data available -- flagged honestly rather than patched without a solid
 basis.
 
+That Kansas comparison only exercises the flat case -- the FCC curve is
+direction-agnostic by construction, so it can't validate the
+terrain-specific knife-edge diffraction piece at all.
+`backend/tests/test_complex_terrain_calibration.py` (marked
+`integration`; skipped by default, see below) does that instead, against
+real Colorado and Utah mountain terrain:
+
+- **KBCO-FM** (Boulder, CO) is radio-locator.com's own FAQ example of
+  terrain asymmetry, independently authored, not derived from anything
+  in this project: "has relatively flat land to the east, but mountains
+  to the west... can transmit much farther to the east than to the
+  west." The model reproduces that pattern -- east (~85-105km at 50 dBu)
+  roughly double west (~35-55km) across a full 24-bearing sweep.
+- **KCYN-FM** (Moab, UT) has no equivalent published claim, so this
+  checks the result against the actual downloaded terrain data directly:
+  confirmed the bearing with the shortest predicted range (21-30km, vs.
+  75-105km in open directions) points toward a profile that climbs 768m
+  within 6km of the tower -- the La Sal Mountains, which rise abruptly
+  immediately east/southeast of Moab, among the most dramatic close-in
+  ranges near any US town. The model's shortest-range bearing landing
+  exactly there, not some arbitrary direction, is the actual test.
+
+## Running the integration tests
+
+Most of the test suite (`pytest tests/`) is fast, pure-logic, and has no
+network dependency, by design (see each test file's docstring for how
+its real-world reference data was generated ahead of time). A few tests
+are marked `integration` and excluded by default (`pytest.ini`'s
+`addopts`) because they hit the real elevation/terrain pipeline directly
+-- slow, and dependent on whatever's actually reachable when you run
+them. Run them explicitly with:
+
+```bash
+python -m pytest tests/ -m integration -v
+```
+
 ## Caching and precomputing coverage
 
 Every computed coverage contour is cached in SQLite (`coverage_cache`),

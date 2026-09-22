@@ -160,7 +160,7 @@ class LocalDemProvider:
             height, width = array.shape
             for i in indices:
                 lat, lon = points[i]
-                col, row = inv * (lon, lat)
+                col, row = inv @ (lon, lat)
                 col, row = int(col), int(row)
                 col = min(max(col, 0), width - 1)
                 row = min(max(row, 0), height - 1)
