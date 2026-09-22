@@ -132,7 +132,7 @@ class ElevationProvider:
                     ELEVATION_API_URL,
                     params={"latitude": lats, "longitude": lons},
                     headers=HTTP_HEADERS,
-                    timeout=20,
+                    timeout=10,
                 )
                 if resp.status_code == 429:
                     retry_after = resp.headers.get("Retry-After")
@@ -151,7 +151,7 @@ class ElevationProvider:
                 time.sleep(0.5 * attempt)
         raise RuntimeError(f"Open-Meteo failed after {retries} attempts: {last_exc}")
 
-    def _fetch_usgs_point(self, key: tuple[float, float], retries: int = 3) -> float:
+    def _fetch_usgs_point(self, key: tuple[float, float], retries: int = 2) -> float:
         lat, lon = key
         last_exc = None
         for attempt in range(1, retries + 1):
@@ -160,7 +160,7 @@ class ElevationProvider:
                     USGS_EPQS_URL,
                     params={"x": lon, "y": lat, "units": "Meters", "wkid": 4326, "includeDate": "false"},
                     headers=HTTP_HEADERS,
-                    timeout=15,
+                    timeout=6,
                 )
                 resp.raise_for_status()
                 value = resp.json()["value"]
@@ -171,8 +171,23 @@ class ElevationProvider:
         raise RuntimeError(f"USGS EPQS failed for {key} after {retries} attempts: {last_exc}")
 
     def _fetch_usgs(self, keys: list[tuple[float, float]]) -> list[float]:
+        # Canary check: USGS being unreachable isn't just a per-point thing
+        # (e.g. no response at all for a whole region, observed for parts
+        # of Alaska) -- without this, a single bad batch would retry every
+        # one of up to 100 points independently at full cost before giving
+        # up, worst case several minutes for one batch. Try the first point
+        # alone first; if that fails, don't bother with the rest.
+        try:
+            first_result = self._fetch_usgs_point(keys[0])
+        except Exception as exc:
+            raise RuntimeError(f"USGS EPQS unreachable (canary point failed): {exc}")
+
+        if len(keys) == 1:
+            return [first_result]
+
         with ThreadPoolExecutor(max_workers=USGS_MAX_WORKERS) as pool:
-            return list(pool.map(self._fetch_usgs_point, keys))
+            rest = list(pool.map(self._fetch_usgs_point, keys[1:]))
+        return [first_result] + rest
 
 
 # Module-level singleton; the in-memory cache is cheap and process-local.

@@ -1,8 +1,9 @@
+import dataclasses
 import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
 
-from .. import coverage_cache
+from .. import background_seeder, coverage_cache
 from ..db import get_conn
 from ..geo.elevation import ElevationUnavailable, elevation_provider
 from ..geo.landcover import canopy_provider
@@ -106,6 +107,11 @@ def list_genres(service: str | None = Query(None, pattern="^(FM|AM)$")):
     finally:
         conn.close()
     return [{"genre": r["genre"], "count": r["c"]} for r in rows]
+
+
+@router.get("/meta/seed-status")
+def seed_status():
+    return dataclasses.asdict(background_seeder.status)
 
 
 @router.get("/stations", response_model=list[StationOut])

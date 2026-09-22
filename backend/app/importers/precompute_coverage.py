@@ -24,8 +24,12 @@ from ..propagation.simple import get_model
 log = logging.getLogger(__name__)
 
 
-def precompute_for_station(row) -> bool:
-    """Returns True if it actually computed something (False if already cached)."""
+def precompute_for_station(row) -> str:
+    """Returns "computed", "cached" (already had a matching entry), or
+    "failed" (elevation was unavailable -- not the same as "cached" and
+    must not be treated as such by a caller, or a real, persistent failure
+    would be silently indistinguishable from routine cache reuse).
+    """
     station = Station(
         id=row["id"], callsign=row["callsign"], service=row["service"],
         frequency_mhz=row["frequency_mhz"], erp_kw=row["erp_kw"], haat_m=row["haat_m"],
@@ -35,7 +39,7 @@ def precompute_for_station(row) -> bool:
     model = get_model(station.service, elevation_provider, canopy_provider, **params)
 
     if coverage_cache.lookup(station.id, model.name, params) is not None:
-        return False
+        return "cached"
 
     try:
         contour = model.coverage_contour(
@@ -44,10 +48,10 @@ def precompute_for_station(row) -> bool:
         )
     except ElevationUnavailable as exc:
         log.warning("Skipping %s (%s): elevation unavailable: %s", station.callsign, station.service, exc)
-        return False
+        return "failed"
 
     coverage_cache.store(station.id, model.name, params, [[lat, lon] for lat, lon in contour])
-    return True
+    return "computed"
 
 
 def run(service: str, states: list[str] | None, delay: float) -> None:
@@ -71,15 +75,23 @@ def run(service: str, states: list[str] | None, delay: float) -> None:
         conn.close()
 
     log.info("Precomputing coverage for %d stations", len(rows))
-    computed = 0
+    computed = cached = failed = 0
     for i, row in enumerate(rows):
-        if precompute_for_station(row):
+        result = precompute_for_station(row)
+        if result == "computed":
             computed += 1
             if delay:
                 time.sleep(delay)
+        elif result == "cached":
+            cached += 1
+        else:
+            failed += 1
         if (i + 1) % 25 == 0:
-            log.info("...%d/%d done (%d newly computed, rest already cached)", i + 1, len(rows), computed)
-    log.info("Finished: %d newly computed, %d already cached", computed, len(rows) - computed)
+            log.info(
+                "...%d/%d done (%d newly computed, %d already cached, %d failed)",
+                i + 1, len(rows), computed, cached, failed,
+            )
+    log.info("Finished: %d newly computed, %d already cached, %d failed", computed, cached, failed)
 
 
 def main() -> None:
