@@ -81,6 +81,65 @@ def knife_edge_diffraction_loss_db(obstruction_height_m: float, d1_km: float, d2
     return max(loss, 0.0)
 
 
+def smooth_earth_radio_horizon_km(h1_m: float, h2_m: float) -> float:
+    """Marginal line-of-sight distance to a smooth spherical Earth (ITU-R
+    P.526-14 eq. 21, in practical units): the classic "radio horizon"
+    formula, sqrt(2*ae)*(sqrt(h1)+sqrt(h2)) with ae in km reduces to this
+    when h1/h2 are in meters and ae = 8495 km (k=4/3 effective radius).
+    """
+    return 4.122 * (math.sqrt(max(h1_m, 0.0)) + math.sqrt(max(h2_m, 0.0)))
+
+
+def _p526_height_gain_db(y: float) -> float:
+    b = y  # beta (polarization/ground factor) == 1 for horizontal polarization at all frequencies
+    if b > 2:
+        return 17.6 * math.sqrt(b - 1.1) - 5 * math.log10(b - 1.1) - 8
+    return 20 * math.log10(b + 0.1 * b ** 3)
+
+
+def smooth_earth_diffraction_loss_db(h1_m: float, h2_m: float, d_km: float, freq_mhz: float) -> float:
+    """Diffraction loss (dB, >= 0) beyond the radio horizon over a smooth
+    spherical Earth -- ITU-R P.526-14 section 3.1.1 ("Diffraction loss for
+    over-the-horizon paths"), equations (13)-(18b), first term of the
+    residue series (accurate to ~2dB per the Recommendation).
+
+    This is the piece the single-knife-edge model above doesn't cover: it
+    only penalizes the single worst *terrain* obstruction it finds against
+    actual elevation data, so over long, genuinely flat/open paths (no
+    terrain ever pokes above the line-of-sight-minus-earth-bulge line) it
+    predicts free-space-like field strength far past where real signals
+    actually fade out. Confirmed against real behavior: for a 100kW/408m
+    HAAT FM station, this model without the smooth-earth term predicted
+    field strength above radio-locator.com's most permissive "fringe"
+    threshold (40 dBu) at 300km+ over open terrain, when radio-locator's
+    own fringe contour doesn't even reach 170km in that direction.
+
+    beta (the polarization/ground-admittance factor, eq. 16) is taken as 1,
+    which the Recommendation gives as exact for horizontal polarization at
+    all frequencies -- and separately notes the ground's electrical
+    characteristics stop mattering below K=0.001, which FM-band K works out
+    to (~0.001) for typical ground even under vertical polarization. So
+    unlike the AM groundwave model, ground conductivity isn't a meaningful
+    input here and isn't exposed as one.
+    """
+    ae_km = EFFECTIVE_EARTH_RADIUS_KM
+    h1_m = max(h1_m, 1.0)
+    h2_m = max(h2_m, 1.0)
+    d_km = max(d_km, 0.01)
+
+    x = 2.188 * freq_mhz ** (1 / 3) * ae_km ** (-2 / 3) * d_km
+    y1 = 9.575e-3 * freq_mhz ** (2 / 3) * ae_km ** (-1 / 3) * h1_m
+    y2 = 9.575e-3 * freq_mhz ** (2 / 3) * ae_km ** (-1 / 3) * h2_m
+
+    if x >= 1.6:
+        f_x = 11 + 10 * math.log10(x) - 17.6 * x
+    else:
+        f_x = -20 * math.log10(x) - 5.6488 * x ** 1.425
+
+    e_over_e0_db = f_x + _p526_height_gain_db(y1) + _p526_height_gain_db(y2)
+    return max(-e_over_e0_db, 0.0)
+
+
 def free_space_field_strength_dbu(erp_kw: float, distance_km: float) -> float:
     """Free-space field strength (dBu, i.e. dB above 1 microvolt/meter) at
     `distance_km` from a transmitter radiating `erp_kw` kW ERP.

@@ -173,31 +173,33 @@ required for correctness.
 
 ## Known limitations / next steps
 
-- **FM coverage over long, open (non-mountainous) paths is measurably
-  over-predicted -- this is the single biggest known accuracy gap.**
-  Direct comparison against radio-locator.com for KWBL-FM (Denver, 100kW,
-  408m HAAT): due north toward Cheyenne, WY (~170km, flat terrain, no
-  obstruction), this model predicts 66 dBu -- above even radio-locator's
-  most permissive "fringe" threshold (40 dBu) -- and stays above 40 dBu out
-  past 300km. Real-world reception (and radio-locator's fringe contour)
-  doesn't reach Cheyenne at all. This isn't a threshold-labeling issue (the
-  thresholds are now radio-locator's own published values, see "Using it"
-  above); the model is genuinely too optimistic at long range over clear
-  terrain. Cause: this v1 model checks each terrain sample against a
-  straight line adjusted for earth-curvature bulge and applies loss only
-  for the single worst obstruction found (see below) -- it has no separate
-  term for the continuous extra attenuation that real propagation
-  experiences beyond the geometric radio horizon even with zero terrain
-  relief (smooth-earth diffraction, atmospheric statistics baked into the
-  FCC's real F(50,50) curves, etc.). The mountain-blocking physics is
-  correctly differential (confirmed: KWBL's Front-Range bearings compute
-  substantially shorter than its plains bearings), so this only shows up
-  as an absolute over-prediction on the *open* side of a contour, not as a
-  wrong-shaped one. Fixing this properly means either implementing the
-  FCC's actual F(50,50)/F(50,10) propagation curves (47 CFR 73.313/73.699)
-  or a real smooth-earth-diffraction term -- both nontrivial enough that
-  they're better done as a deliberate follow-up with a verified data
-  source than guessed at.
+- **FM beyond-horizon over-prediction (fixed).** Was: this model checked
+  each terrain sample against a straight line adjusted for earth-curvature
+  bulge and applied loss only for the single worst obstruction found --
+  with no separate term for the continuous extra attenuation real
+  propagation experiences beyond the geometric radio horizon even with
+  zero terrain relief. Measured effect: for KWBL-FM (Denver, 100kW, 408m
+  HAAT) due north toward Cheyenne, WY (~170km, open terrain), the model
+  predicted 66 dBu -- above even radio-locator.com's most permissive
+  "fringe" threshold (40 dBu), which its own map doesn't reach at that
+  distance. Fixed by adding the ITU-R P.526-14 §3.1.1 smooth-earth
+  diffraction formula (equations 13-18b; ground conductivity/polarization
+  factor β taken as 1, which the Recommendation gives as exact for
+  horizontal polarization at all frequencies) as a second loss term beyond
+  `smooth_earth_radio_horizon_km()`, summed with (not max()'d against) the
+  existing terrain-specific knife-edge loss -- max() was tried first and
+  discarded because it let the horizon term completely swamp real,
+  already-confirmed mountain blocking past ~100km, making a mountain-facing
+  and a clear bearing converge to identical numbers. Summing does mean the
+  two terms likely double-count some shared geometry near the horizon
+  (they're not perfectly independent), which is a known imprecision of this
+  approximation, not a bug -- see `base.py: smooth_earth_diffraction_loss_db`
+  and `tests/test_smooth_earth_diffraction.py` for the derivation, sourced
+  formula, and the regression test pinned to the KWBL/Cheyenne measurement.
+  This is still a simplified model, not the FCC's actual F(50,50) curves
+  (47 CFR 73.313/73.699, empirically measured, not purely physics-derived)
+  -- a real next step if more accuracy is needed, since those aren't a
+  closed-form formula and would need a verified digitized source.
 - **Propagation model is deliberately simple (v1) in general.** FM/VHF
   coverage uses free-space path loss plus a single worst-case knife-edge
   diffraction obstruction per path -- a legitimate but simplified physical

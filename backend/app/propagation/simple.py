@@ -30,11 +30,13 @@ from .base import (
     earth_curvature_bulge_m,
     free_space_field_strength_dbu,
     knife_edge_diffraction_loss_db,
+    smooth_earth_diffraction_loss_db,
+    smooth_earth_radio_horizon_km,
 )
 
 
 class SimpleFmModel(PropagationModel):
-    name = "simple_fm_v2"  # bump this string whenever the math below changes -- see coverage_cache
+    name = "simple_fm_v4"  # bump this string whenever the math below changes -- see coverage_cache
 
     default_haat_m = 30.0
     receiver_height_m = 9.0  # ~30ft, the FCC's standard FM receive height
@@ -56,13 +58,16 @@ class SimpleFmModel(PropagationModel):
         haat = station.haat_m if station.haat_m and station.haat_m > 0 else self.default_haat_m
         tx_height_amsl = elevations[0] + haat
         erp = station.erp_kw if station.erp_kw and station.erp_kw > 0 else 0.05
+        radio_horizon_km = smooth_earth_radio_horizon_km(haat, self.receiver_height_m)
 
         results = []
         for k in range(1, len(all_distances)):
             d_rx = all_distances[k]
             rx_height_amsl = elevations[k] + self.receiver_height_m
 
-            diffraction_loss = 0.0
+            # Actual-terrain knife-edge check: catches real hills/mountains
+            # poking above the line-of-sight-minus-earth-bulge line.
+            terrain_diffraction_loss = 0.0
             for j in range(1, k):
                 d1 = all_distances[j]
                 d2 = d_rx - d1
@@ -73,9 +78,31 @@ class SimpleFmModel(PropagationModel):
                 terrain_height = elevations[j] + canopy[j]
                 obstruction_height = terrain_height - (los_height - bulge)
                 loss = knife_edge_diffraction_loss_db(obstruction_height, d1, d2, station.frequency_mhz)
-                if loss > diffraction_loss:
-                    diffraction_loss = loss
+                if loss > terrain_diffraction_loss:
+                    terrain_diffraction_loss = loss
 
+            # Smooth-earth diffraction: catches the case actual-terrain
+            # knife-edge checking alone misses -- open/flat paths, where no
+            # DEM sample ever pokes above the LOS-minus-bulge line, but the
+            # receiver is still beyond the geometric radio horizon (the
+            # curved earth itself is the obstruction at that point, not any
+            # single terrain feature). See smooth_earth_diffraction_loss_db.
+            smooth_earth_loss = (
+                smooth_earth_diffraction_loss_db(haat, self.receiver_height_m, d_rx, station.frequency_mhz)
+                if d_rx > radio_horizon_km else 0.0
+            )
+
+            # Summed, not max()'d: these represent loss from two different
+            # parts of the same path (a specific real obstruction, plus
+            # continued beyond-horizon spreading past it), not two competing
+            # estimates of the same thing. max() was tried first and
+            # discarded -- it let the horizon-driven term completely swamp
+            # real, already-confirmed mountain blocking past ~100km, making
+            # a station's mountain-facing and open-plains bearings converge
+            # to identical numbers well before either search radius was
+            # reached (visibly: a mountain-blocked bearing and a clear one
+            # producing the exact same field strength from 110km onward).
+            diffraction_loss = terrain_diffraction_loss + smooth_earth_loss
             free_space = free_space_field_strength_dbu(erp, d_rx)
             results.append(free_space - diffraction_loss)
         return results
