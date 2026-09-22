@@ -42,7 +42,7 @@ from .base import (
 
 
 class SimpleFmModel(PropagationModel):
-    name = "simple_fm_v6"  # bump this string whenever the math below changes -- see coverage_cache
+    name = "simple_fm_v7"  # bump this string whenever the math below changes -- see coverage_cache
 
     default_haat_m = 30.0
     receiver_height_m = 9.0  # ~30ft, the FCC's standard FM receive height
@@ -93,9 +93,7 @@ class SimpleFmModel(PropagationModel):
         ]
         elevations = self.elevation.get_elevations(points)
 
-        canopy = [0.0] * len(points)
-        if self.canopy is not None:
-            canopy = [self.canopy.canopy_height_m(lat, lon) for lat, lon in points]
+        canopy = self.canopy.canopy_heights_m(points) if self.canopy is not None else [0.0] * len(points)
 
         haat = station.haat_m if station.haat_m and station.haat_m > 0 else self.default_haat_m
         tx_height_amsl = self._average_terrain_elevation_m(station) + haat

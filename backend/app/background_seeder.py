@@ -40,8 +40,9 @@ def _precompute_with_timeout(row) -> str:
     finally:
         executor.shutdown(wait=False)
 
-# FM computations involve real network-bound elevation lookups; space them
-# out to stay polite to the (rate-limited, shared) elevation APIs. AM is
+# FM computations may need to download new DEM tiles (network-bound); space
+# them out to stay polite. Already-downloaded areas are fast regardless
+# (local file reads), so this mostly matters for genuinely new regions. AM is
 # pure math with no terrain dependency, so there's nothing to be polite to.
 FM_DELAY_S = 0.75
 AM_DELAY_S = 0.0

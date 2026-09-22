@@ -25,5 +25,15 @@ ELEVATION_API_URL = "https://api.open-meteo.com/v1/elevation"
 
 # USGS Elevation Point Query Service: free, no key, single point per request,
 # but authoritative (3DEP) and US-only -- which matches our FCC-only station
-# data. Used as a fallback when Open-Meteo is unavailable/rate-limited.
+# data. Used as a last-resort fallback when a DEM tile can't be downloaded.
 USGS_EPQS_URL = "https://epqs.nationalmap.gov/v1/json"
+
+# USGS 3DEP seamless 1-arc-second (~30m) DEM tiles, distributed as public,
+# unauthenticated 1x1-degree GeoTIFFs on S3. This is the primary elevation
+# source (see geo/local_dem.py): download a tile once, then every point
+# lookup in that tile is a local file read -- no per-point network calls,
+# no rate limits, and it covers Alaska (verified directly; the free point
+# APIs below have real regional gaps there).
+DEM_TILE_BASE_URL = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1/TIFF/current"
+DEM_TILE_DIR = DATA_DIR / "dem_tiles"
+DEM_TILE_DIR.mkdir(exist_ok=True)

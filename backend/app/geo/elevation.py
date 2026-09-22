@@ -1,5 +1,15 @@
-"""Terrain elevation lookups, backed by a local SQLite cache so repeated
-coverage runs over the same area don't re-hit the network.
+"""Network-based point elevation lookups: Open-Meteo, falling back to USGS
+EPQS. This is no longer the primary elevation source -- geo/local_dem.py
+(downloaded USGS 3DEP DEM tiles, read locally) is, since it has no
+per-point network cost and no rate limits after a tile is cached. This
+module is kept as local_dem's own fallback, for points whose DEM tile
+can't be downloaded (a genuine 3DEP coverage gap, or a transient network
+failure fetching the tile itself) -- see the bottom of this file for how
+the two are combined into the `elevation_provider` singleton everything
+else imports.
+
+Backed by a local SQLite cache so repeated point lookups through this
+fallback path don't re-hit the network for the same point twice.
 
 Two sources are used:
 - Open-Meteo (SRTM/ASTER-based, ~90m resolution): primary, because it
@@ -190,5 +200,13 @@ class ElevationProvider:
         return [first_result] + rest
 
 
-# Module-level singleton; the in-memory cache is cheap and process-local.
-elevation_provider = ElevationProvider()
+# The public singleton everything else imports: local DEM tiles first,
+# falling back to the network point APIs above only for points whose tile
+# can't be downloaded. Constructed here (rather than in local_dem.py) so
+# every existing `from .geo.elevation import elevation_provider` call site
+# keeps working unchanged.
+from ..config import DEM_TILE_DIR  # noqa: E402
+from .local_dem import LocalDemProvider  # noqa: E402
+
+_network_fallback = ElevationProvider()
+elevation_provider = LocalDemProvider(DEM_TILE_DIR, fallback_provider=_network_fallback)

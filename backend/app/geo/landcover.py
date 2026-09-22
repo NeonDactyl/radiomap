@@ -1,43 +1,61 @@
-"""Tree canopy / land-cover lookup, kept behind a small interface so a real
-dataset (e.g. NLCD tree canopy cover, served locally from a downloaded
-raster, or a vegetation layer from a GIS service) can be dropped in later
-without touching the propagation code.
+"""Tree canopy / land-cover lookup, kept behind a small interface so the
+propagation model doesn't care which implementation is wired in.
 
-No public, key-free, always-reachable canopy API was available when this
-was built (the obvious USGS/MRLC service endpoints were not reachable from
-here), so v1 ships a null provider that reports no canopy anywhere. The
-propagation model already calls this for every terrain sample, so wiring
-in real canopy heights later is a one-class change -- see
-`CanopyProvider` below for the extension point.
+v1 found no reachable free canopy API (the obvious USGS/MRLC service
+endpoints weren't reachable from here) and shipped a null provider. That's
+since been replaced: `tree_canopy.py`'s RemoteTreeCanopyProvider reads
+USDA Forest Service NLCD Tree Canopy Cover data directly (lazily, via
+HTTP range requests into a public, unauthenticated GeoTIFF -- no download,
+no API key, no rate limit) -- see that module's docstring for how it was
+found and verified. `NullCanopyProvider`/`ConstantCanopyProvider` stay
+here for testing.
+
+Batch interface (not per-point) deliberately, matching ElevationProvider:
+a whole bearing's worth of profile points at once lets an implementation
+batch/cache reads efficiently (e.g. GDAL's own block cache across nearby
+points), the same way elevation batches across a whole bearing already
+does.
 """
 from abc import ABC, abstractmethod
 
 
 class CanopyProvider(ABC):
     @abstractmethod
-    def canopy_height_m(self, lat: float, lon: float) -> float:
-        """Typical tree height at this point, in meters. 0 = no canopy."""
+    def canopy_heights_m(self, points: list[tuple[float, float]]) -> list[float]:
+        """Typical tree height (m) at each (lat, lon) point, in order. 0 = no canopy."""
         raise NotImplementedError
 
 
 class NullCanopyProvider(CanopyProvider):
-    """Default stub: no tree-cover data source wired up yet."""
+    """No tree-cover data -- the model behaves as if terrain were bare."""
 
-    def canopy_height_m(self, lat: float, lon: float) -> float:
-        return 0.0
+    def canopy_heights_m(self, points: list[tuple[float, float]]) -> list[float]:
+        return [0.0] * len(points)
 
 
 class ConstantCanopyProvider(CanopyProvider):
-    """Useful for experimenting with the effect of blanket forest cover
-    before a real dataset is wired in, e.g. ConstantCanopyProvider(15.0)
-    to pretend the whole study area is covered in 15m trees.
+    """Useful for experimenting with the effect of blanket forest cover,
+    e.g. ConstantCanopyProvider(15.0) to pretend the whole study area is
+    covered in 15m trees.
     """
 
     def __init__(self, height_m: float):
         self.height_m = height_m
 
-    def canopy_height_m(self, lat: float, lon: float) -> float:
-        return self.height_m
+    def canopy_heights_m(self, points: list[tuple[float, float]]) -> list[float]:
+        return [self.height_m] * len(points)
 
 
-canopy_provider: CanopyProvider = NullCanopyProvider()
+def _default_canopy_provider() -> CanopyProvider:
+    try:
+        from .tree_canopy import RemoteTreeCanopyProvider
+        return RemoteTreeCanopyProvider()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "Could not initialize the remote tree-canopy provider; falling back to no canopy data"
+        )
+        return NullCanopyProvider()
+
+
+canopy_provider: CanopyProvider = _default_canopy_provider()

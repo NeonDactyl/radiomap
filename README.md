@@ -8,18 +8,28 @@ from tower location, transmit power, and terrain.
 - Imports real US AM/FM station data (call sign, tower location, ERP/power,
   antenna height above average terrain) from the FCC's public station
   query databases.
-- Looks up real terrain elevation along the path from each tower outward
-  (via a free SRTM-based elevation API), so hills and mountains actually
-  block or extend a station's reach.
+- Looks up real terrain elevation along the path from each tower outward,
+  so hills and mountains actually block or extend a station's reach.
+  Primary source is downloaded USGS 3DEP DEM tiles read locally (see
+  `backend/app/geo/local_dem.py`) -- no per-point network calls or rate
+  limits once a tile is cached, and it covers areas the free point APIs
+  don't (confirmed: parts of Alaska). Falls back to those point APIs
+  (Open-Meteo, then USGS EPQS) only for a tile that can't be downloaded.
+- Looks up real tree canopy cover too, read directly (no download, no API
+  key) from the USDA Forest Service's national NLCD Tree Canopy Cover
+  raster over HTTP range requests -- see `backend/app/geo/tree_canopy.py`.
+  Feeds into the same terrain-obstruction geometry as elevation, so dense
+  forest between a tower and a receiver adds to the blocking, not just
+  bare ground height.
 - Predicts a coverage contour per station, rendered as a polygon on a
   Leaflet map. FM uses the FCC's own real F(50,50) field-strength curve
   (transcribed from the FCC's own reference implementation -- see
   `backend/app/propagation/fcc_curves.py`) as the baseline, with real
-  single-direction terrain obstruction (actual DEM-based knife-edge
-  diffraction) layered on top so a mountain range on one side of a station
-  comes out shorter than the open side. AM uses a simpler groundwave
-  approximation. See `backend/app/propagation/simple.py` for details and
-  known limitations of both.
+  single-direction terrain obstruction (actual DEM- and canopy-based
+  knife-edge diffraction) layered on top so a mountain range on one side
+  of a station comes out shorter than the open side. AM uses a simpler
+  groundwave approximation. See `backend/app/propagation/simple.py` for
+  details and known limitations of both.
 - Attaches a programming genre/format where one exists in Wikidata (the FCC
   itself doesn't track this -- it's not something it regulates).
 - Caches computed coverage contours in SQLite (`coverage_cache`) so a
@@ -57,6 +67,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+`rasterio` (elevation/canopy raster reading) installs its own bundled
+GDAL via prebuilt wheels on common platforms (Linux/macOS/Windows,
+standard Python versions) -- no separate system GDAL install needed in
+the typical case.
 
 ## Import station data
 
@@ -124,19 +139,21 @@ take effect on browser refresh with no restart needed.
    coverage edge or wastes time searching way past a weak one's. Set it
    manually only if you want a specific search cutoff.
 
-Terrain lookups hit a free public elevation API (Open-Meteo) on first use
-per area and are cached afterward in `elevation_cache` inside the same
-SQLite DB, so repeat coverage runs over the same region are fast. Open-Meteo
-is shared/rate-limited, so `backend/app/geo/elevation.py` automatically
-falls back to the USGS Elevation Point Query Service (US-only, authoritative
-3DEP data, matches our FCC-only station coverage) when it gets rate-limited;
-if *both* sources are unavailable you'll see an error in the coverage panel
--- wait a bit and retry. A cold "Show coverage" click on a new, weak/local
-station can take ~5-15 seconds; a high-power/tall-tower FM station searches
-a much wider radius (real 60 dBu contours for a 100kW station can be over
-100km out) and can take up to ~40 seconds -- most of that is the per-bearing
-terrain lookups, not the propagation math itself. See "Caching and
-precomputing coverage" below for how to avoid paying that cost live.
+Terrain lookups download USGS DEM tiles on first use per area (see
+`backend/app/geo/local_dem.py`) and read them locally from then on, so
+repeat coverage runs over the same region are fast even across restarts
+(tiles persist on disk in `backend/data/dem_tiles/`). If a tile can't be
+downloaded, it falls back to Open-Meteo, then USGS EPQS (both point
+APIs); if *all three* are unavailable you'll see an error in the coverage
+panel -- wait a bit and retry. A cold "Show coverage" click on a new area
+downloads however many 1-degree tiles the search radius spans (each
+~40-50MB, a few seconds each); a weak/local station usually needs just
+one, a high-power/tall-tower station's much wider search radius (real
+60 dBu contours for a 100kW station can be over 100km out) can need a
+handful. Once those tiles are on disk, recomputing the same or a nearby
+station's coverage is fast regardless of parameters. See "Caching and
+precomputing coverage" below for how to avoid paying even the first-time
+cost live.
 
 ## Caching and precomputing coverage
 
@@ -266,13 +283,26 @@ required for correctness.
   points) from the FCC's separate antenna pattern tables -- a real,
   scoped follow-up (new importer + a per-bearing ERP multiplier in the
   propagation models), not implemented here.
-- **Tree cover is architected but not wired to real data.**
-  `backend/app/geo/landcover.py` defines a `CanopyProvider` interface that
-  the FM model already calls for every terrain sample point, but it's
-  currently a stub returning zero canopy everywhere -- no free, reliably
-  reachable canopy-height API was found while building this. Wiring in a
-  real dataset (e.g. NLCD tree canopy, served from a locally downloaded
-  raster) is a self-contained change to that one file.
+- **Tree cover (fixed).** Was: `backend/app/geo/landcover.py`'s
+  `CanopyProvider` interface existed and the FM model already called it
+  for every terrain sample point, but it was a stub returning zero canopy
+  everywhere -- no free, reliably reachable canopy-height API had been
+  found. Fixed: `backend/app/geo/tree_canopy.py` reads the USDA Forest
+  Service's national NLCD Tree Canopy Cover raster (percent cover, 30m,
+  most recent year) directly over HTTP -- no download, no API key. The
+  raster is published as a ~3.6GB zip with the GeoTIFF stored
+  *uncompressed* inside it (confirmed directly), which means GDAL can
+  fetch just the specific internal tiles a read touches via HTTP range
+  requests (`/vsizip/vsicurl/...`) instead of downloading the whole file.
+  Verified against known geography: rural West Virginia forest reads
+  ~77% cover, eastern Colorado plains reads 0%. Percent cover isn't
+  itself an obstruction height, so it's scaled against a nominal 18m
+  mature-tree height as an explicit, documented approximation -- see
+  `NOMINAL_TREE_HEIGHT_M` in that file. Per-point reads (not one big
+  bounding-box read) turned out much faster in practice: 40 profile
+  points along a real 150km bearing read in 1.5s relying on GDAL's own
+  block cache for points sharing a tile, versus 8.5s for one rectangular
+  window covering the same span.
 - **HAAT reference point (fixed).** Was: the antenna's AMSL height was
   approximated as (ground elevation *at the tower* + HAAT). Per radio-locator's
   own FAQ (and the actual FCC definition), HAAT is antenna height above the
@@ -283,19 +313,27 @@ required for correctness.
   the wider average down). `SimpleFmModel._average_terrain_elevation_m()`
   now computes the real ring average from actual elevation data (8 radials
   x 9 samples between 1.5-10mi) and uses that as the AMSL reference instead.
-- **Elevation data depends on two free public APIs, and coverage gaps are
-  real, not just rate limits.** Primary is Open-Meteo (SRTM-based, ~90m
-  resolution; rate-limited under heavy use), falling back to USGS EPQS
-  (authoritative US 3DEP data, US-only). Confirmed directly: parts of
-  Alaska return no response at all from USGS EPQS, not just a slow one --
-  a genuine regional data gap, not something retrying harder fixes. The
-  fallback has a fast circuit breaker for this (try one point first; if
-  that fails, don't retry the other ~99 in the batch at full cost each) --
-  without it, a single bad batch took several minutes before giving up
-  instead of the ~10-30s it takes now to correctly report the area as
-  unavailable. Swapping to locally downloaded SRTM tiles would remove the
-  network dependency (and this failure mode) entirely -- `backend/app/geo/
-  elevation.py` is the place to do that.
+- **Elevation now comes from local USGS 3DEP DEM tiles, not point APIs
+  (fixed).** Was: every point lookup was a network call to Open-Meteo
+  (rate-limited under heavy use) falling back to USGS EPQS -- and USGS
+  EPQS turned out to have real regional gaps, not just slowness: confirmed
+  directly, parts of Alaska returned no response at all. A batch of up to
+  100 points retried every one individually at full cost before giving
+  up, worst case several minutes for one bad batch. Fixed properly:
+  `backend/app/geo/local_dem.py` downloads USGS's own public,
+  unauthenticated 1x1-degree DEM tiles (1 arc-second / ~30m resolution,
+  actually finer than Open-Meteo's 90m) from S3
+  (`prd-tnm.s3.amazonaws.com`, verified directly, including the exact
+  Alaska tile that the point APIs couldn't serve) and reads elevation
+  locally from then on -- no per-point network calls, no rate limits,
+  after the one-time tile download. The old point-API code
+  (`geo/elevation.py`) is kept as a fallback for a tile that can't be
+  downloaded (a genuine 3DEP coverage gap, or a transient failure
+  fetching the tile itself), circuit-breaker included. Tradeoff: tiles
+  are ~40-50MB each and accumulate in `backend/data/dem_tiles/`
+  (gitignored) as new areas get queried -- expect multiple GB over time
+  for nationwide use, which is the point (local, permanent, fast) but
+  worth knowing about if disk space is tight.
 - Only primary FM/AM licensed stations are imported -- FM translators/
   boosters (FX/FL service codes) are skipped to avoid cluttering the map
   with low-power rebroadcasters. Non-US filings (the FCC query tool also
