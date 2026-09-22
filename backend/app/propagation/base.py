@@ -126,15 +126,19 @@ class PropagationModel(ABC):
         n_bearings: int = 36,
     ) -> list[tuple[float, float]]:
         """Sample field strength outward along `n_bearings` evenly spaced
-        radials and return, for each bearing, the farthest point still
-        predicted to be at or above `threshold_dbu`. This traces a single
-        closed polygon approximating the "expected coverage" area.
+        radials and return, for each bearing, the boundary where the signal
+        sustainedly drops below `threshold_dbu`. This traces a single closed
+        polygon approximating the "expected coverage" area.
 
-        Simplification: within a bearing we take the outermost qualifying
-        distance rather than stopping at the first drop below threshold, so
-        a station that regains line-of-sight past a single ridge still
-        shows the farther, clear service area on that radial. Shadowed
-        pockets nearer in are not represented as holes in v1.
+        The boundary is the last qualifying distance before a *sustained*
+        drop (the next couple of samples also below threshold) -- a single
+        anomalous sample doesn't end the contour early, but a real mountain
+        range does. An earlier version took the outermost qualifying
+        distance anywhere on the bearing, which let a station "see past" a
+        genuinely blocked stretch to a distant recovery pocket beyond it,
+        producing near-perfect circles for strong stations instead of the
+        terrain-shaped contour the diffraction model was actually computing
+        -- see the regression test in test_propagation.py.
         """
         n_steps = max(int(max_radius_km / step_km), 1)
         distances = [s * step_km for s in range(1, n_steps + 1)]
@@ -151,15 +155,19 @@ class PropagationModel(ABC):
                 all_points.extend(destination_point(station.lat, station.lon, bearing, d) for d in distances)
             self.elevation.get_elevations(all_points)
 
+        sustain_samples = 2  # tolerate a single-sample dip; require it to persist to count as the boundary
+
         contour = []
         for bearing in bearings:
             strengths = self.field_strengths_along_bearing(station, bearing, distances)
-            best_distance = 0.0
-            for d, strength in zip(distances, strengths):
+            boundary_distance = distances[-1]  # signal never sustainedly drops within the search radius
+            for i, strength in enumerate(strengths):
                 if strength >= threshold_dbu:
-                    best_distance = d
-            if best_distance == 0.0:
-                best_distance = step_km * 0.5  # station barely covers itself
-            lat, lon = destination_point(station.lat, station.lon, bearing, best_distance)
+                    continue
+                window = strengths[i:i + sustain_samples]
+                if all(w < threshold_dbu for w in window):
+                    boundary_distance = distances[i - 1] if i > 0 else step_km * 0.5
+                    break
+            lat, lon = destination_point(station.lat, station.lon, bearing, boundary_distance)
             contour.append((lat, lon))
         return contour

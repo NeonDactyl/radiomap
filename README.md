@@ -102,19 +102,27 @@ take effect on browser refresh with no restart needed.
    city of license often isn't the market it actually serves (e.g. WJLI is
    licensed to Metropolis, IL but serves Paducah, KY, so panning to KY alone
    won't surface it).
-3. Pick a signal-strength threshold and max radius, then "Show coverage"
-   to draw the predicted coverage polygon. For AM stations you can also
-   pick a ground-conductivity preset (affects groundwave range a lot).
+3. Pick a signal-strength threshold, then "Show coverage" to draw the
+   predicted coverage polygon. For AM stations you can also pick a
+   ground-conductivity preset (affects groundwave range a lot). Max radius
+   is left on "Auto" by default -- it's picked per station from actual
+   ERP/HAAT (FM) or solved directly from the groundwave model (AM), because
+   a single fixed radius either clips a powerful station's real coverage
+   edge or wastes time searching way past a weak one's. Set it manually
+   only if you want a specific search cutoff.
 
 Terrain lookups hit a free public elevation API (Open-Meteo) on first use
 per area and are cached afterward in `elevation_cache` inside the same
 SQLite DB, so repeat coverage runs over the same region are fast. Open-Meteo
 is shared/rate-limited, so `backend/app/geo/elevation.py` automatically
 falls back to the USGS Elevation Point Query Service (US-only, authoritative
-3DEP data, matches our FCC-only station coverage) when it gets rate-limited.
-A cold "Show coverage" click on a new area can take ~5-15 seconds; if
-*both* sources are unavailable you'll see an error in the coverage panel --
-wait a bit and retry.
+3DEP data, matches our FCC-only station coverage) when it gets rate-limited;
+if *both* sources are unavailable you'll see an error in the coverage panel
+-- wait a bit and retry. A cold "Show coverage" click on a new, weak/local
+station can take ~5-15 seconds; a high-power/tall-tower FM station searches
+a much wider radius (real 54 dBu contours for a 100kW station can be
+150-250km out) and can take up to ~40 seconds -- most of that is the
+per-bearing terrain lookups, not the propagation math itself.
 
 ## Known limitations / next steps
 
@@ -127,6 +135,16 @@ wait a bit and retry.
   threshold to compensate). The natural next step is a full **Longley-Rice
   / ITM** implementation behind the same `PropagationModel` interface --
   see `backend/app/propagation/base.py` and `simple.py` for the seam.
+- **Coverage boundary per bearing is the last point before a *sustained*
+  drop below threshold** (the next couple of samples also below it) --
+  not the first drop, and not the farthest qualifying point anywhere on
+  the bearing. The former tolerates a single anomalous low sample without
+  prematurely ending the contour; an earlier version used "farthest
+  qualifying point anywhere," which let a strong station's signal "see
+  past" a genuinely blocked mountain stretch to a distant recovery pocket,
+  producing near-perfect circles instead of the terrain-shaped contour the
+  diffraction model was actually computing. See
+  `backend/tests/test_propagation.py` for the regression tests.
 - **AM groundwave is a rough approximation**, not the FCC's official
   curves (47 CFR 73.190, derived from Sommerfeld/GRWAVE integration). It's
   calibrated to one reference point and ignores terrain and night skywave

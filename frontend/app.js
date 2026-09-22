@@ -231,12 +231,20 @@ async function showCoverage() {
   if (!state.selected) return;
   const btn = el("coverage-btn");
   btn.disabled = true;
-  el("coverage-status").textContent = "Computing terrain profile...";
+  el("coverage-status").textContent =
+    "Computing terrain profile... (high-power/tall-tower stations search a wider radius and can take up to ~40s)";
 
   const params = new URLSearchParams({
     threshold_dbu: el("threshold-select").value,
-    max_radius_km: el("radius-input").value,
   });
+  const radiusValue = el("radius-input").value.trim();
+  if (radiusValue) {
+    // Leave it out entirely when empty -- the backend picks a search
+    // radius based on the station's actual power/HAAT (a fixed default
+    // was either too small to find a high-power station's real coverage
+    // edge, or wastefully large for a weak one).
+    params.set("max_radius_km", radiusValue);
+  }
   if (state.selected.service === "AM") {
     params.set("ground_conductivity_mmho", el("conductivity-select").value);
   }
@@ -257,7 +265,8 @@ async function showCoverage() {
       fillOpacity: 0.18,
     }).addTo(state.coverageLayer);
     panWithoutTriggeringReload(() => map.fitBounds(poly.getBounds(), { padding: [30, 30] }));
-    el("coverage-status").textContent = `Model: ${data.model} · threshold ${data.threshold_dbu} dBu`;
+    el("coverage-status").textContent =
+      `Model: ${data.model} · threshold ${data.threshold_dbu} dBu · searched out to ${Math.round(data.max_radius_km)} km`;
   } catch (err) {
     el("coverage-status").textContent = err.message || "Failed to compute coverage.";
     console.error(err);

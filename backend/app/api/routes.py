@@ -7,7 +7,7 @@ from ..geo.elevation import ElevationUnavailable, elevation_provider
 from ..geo.landcover import canopy_provider
 from ..models import CoverageResponse, StationDetail, StationOut
 from ..propagation.base import Station
-from ..propagation.simple import get_model
+from ..propagation.simple import get_model, suggest_am_search_radius_km, suggest_fm_search_radius_km
 
 router = APIRouter(prefix="/api")
 
@@ -203,13 +203,19 @@ def get_coverage(
         directional=bool(row["directional"]),
     )
 
-    if station.service == "FM":
-        default_threshold, default_radius, default_step = 54.0, 90.0, 3.0
-    else:
-        default_threshold, default_radius, default_step = 54.0, 150.0, 4.0
-
+    default_threshold = 54.0
     threshold_dbu = threshold_dbu if threshold_dbu is not None else default_threshold
+
+    if station.service == "FM":
+        default_radius = suggest_fm_search_radius_km(station.erp_kw, station.haat_m)
+    else:
+        default_radius = suggest_am_search_radius_km(
+            station.erp_kw, station.frequency_mhz, ground_conductivity_mmho, threshold_dbu,
+        )
     max_radius_km = max_radius_km if max_radius_km is not None else default_radius
+    # Keep the number of samples per bearing (and thus compute/elevation-call
+    # cost) roughly constant regardless of how far the search radius reaches.
+    default_step = max(2.0, min(max_radius_km / 35.0, 8.0))
     step_km = step_km if step_km is not None else default_step
 
     model = get_model(

@@ -126,3 +126,45 @@ def get_model(service: str, elevation_provider, canopy_provider=None, **kwargs) 
             ground_conductivity_mmho=kwargs.get("ground_conductivity_mmho", 5.0),
         )
     raise ValueError(f"Unknown service: {service}")
+
+
+def suggest_fm_search_radius_km(erp_kw: float | None, haat_m: float | None) -> float:
+    """A flat default search radius doesn't work across FM stations: a
+    100kW/400m-HAAT station's real 54 dBu contour can be 150-250km out,
+    while a 17W translator's is a few km. Undershooting the radius doesn't
+    just clip the map -- it makes coverage_contour() report every bearing
+    at the search cap, since the real threshold crossing was never reached
+    (this was the bug behind an all-directions-identical, obviously-wrong
+    circle for high-power stations: the terrain diffraction was computing
+    correctly, the search radius just never got far enough to see it drop
+    below threshold in any direction).
+
+    Estimates via the standard VHF radio-horizon formula (4.12*sqrt(h) in
+    km, receiver assumed at 9m) plus a log-scaled ERP term and a fixed
+    margin for diffraction extending real coverage past the pure horizon.
+    """
+    haat = max(haat_m if haat_m and haat_m > 0 else 30.0, 1.0)
+    erp = max(erp_kw if erp_kw and erp_kw > 0 else 0.05, 0.01)
+    horizon_km = 4.12 * (math.sqrt(haat) + math.sqrt(9.0))
+    radius = horizon_km * 1.8 + 15 * math.log10(erp + 1)
+    return max(40.0, min(radius, 300.0))
+
+
+def suggest_am_search_radius_km(
+    erp_kw: float | None, frequency_mhz: float, ground_conductivity_mmho: float, threshold_dbu: float
+) -> float:
+    """AM has no terrain dependency, so unlike FM we can just solve for the
+    actual threshold crossing directly (cheap: no network/elevation calls)
+    instead of guessing at a search radius.
+    """
+    station = Station(
+        id=0, callsign="", service="AM", frequency_mhz=frequency_mhz,
+        erp_kw=erp_kw, haat_m=None, lat=0.0, lon=0.0, directional=False,
+    )
+    model = SimpleAmModel(elevation_provider=None, ground_conductivity_mmho=ground_conductivity_mmho)
+    probe_distances = [d for d in range(5, 505, 5)]
+    strengths = model.field_strengths_along_bearing(station, 0.0, probe_distances)
+    for d, s in zip(probe_distances, strengths):
+        if s < threshold_dbu:
+            return min(d * 1.15, 400.0)  # small margin past the crossing
+    return 400.0
