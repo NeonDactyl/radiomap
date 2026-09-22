@@ -334,6 +334,24 @@ required for correctness.
   (gitignored) as new areas get queried -- expect multiple GB over time
   for nationwide use, which is the point (local, permanent, fast) but
   worth knowing about if disk space is tight.
+- **Offshore points (fixed).** A high-power coastal station's search
+  radius often extends out over open water, where 3DEP has no tile at
+  all (confirmed directly: 404 for the specific tile off the coast near
+  KQED-FM, San Francisco). Originally this fell through to the network
+  fallback, which *also* has no data there -- and every such tile paid
+  the fallback's full retry/timeout budget before giving up, so a station
+  whose radius crossed several offshore tiles timed out past 2 minutes
+  instead of failing fast. Fixed: a 404 (3DEP's catalog confirming the
+  tile doesn't exist, not just a failed download) is treated as strong
+  enough evidence of open water on its own -- 3DEP's *land* coverage is
+  near-complete, so a confirmed absence very likely means water, not a
+  real gap. Skips the fallback entirely and assumes sea level (0m) for
+  that tile. A tile that merely *fails to download* (network error,
+  unknown status -- could well be real land) is not treated this way and
+  still goes through the fallback / raises normally; see
+  `LocalDemProvider.get_elevations` and
+  `tests/test_local_dem_ocean_fallback.py` for the distinction and the
+  regression tests pinning it down.
 - Only primary FM/AM licensed stations are imported -- FM translators/
   boosters (FX/FL service codes) are skipped to avoid cluttering the map
   with low-power rebroadcasters. Non-US filings (the FCC query tool also

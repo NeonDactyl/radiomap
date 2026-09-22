@@ -34,7 +34,15 @@ TILE_DOWNLOAD_TIMEOUT_S = 30
 
 
 class TileUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str, confirmed_missing: bool = False):
+        super().__init__(message)
+        # True only for a 404 -- 3DEP has near-complete US *land* coverage,
+        # so a tile confirmed not to exist in its catalog is strong
+        # evidence the area is open water, not a real gap in land data.
+        # False for a download failure (network error, timeout, etc.),
+        # which says nothing about whether the tile exists -- that case
+        # must not be treated the same way (see get_elevations below).
+        self.confirmed_missing = confirmed_missing
 
 
 def tile_name(lat: float, lon: float) -> str:
@@ -68,7 +76,7 @@ class LocalDemProvider:
         try:
             resp = requests.get(url, headers=HTTP_HEADERS, timeout=TILE_DOWNLOAD_TIMEOUT_S, stream=True)
             if resp.status_code == 404:
-                raise TileUnavailable(f"No DEM tile {name} (outside 3DEP coverage)")
+                raise TileUnavailable(f"No DEM tile {name} (outside 3DEP coverage)", confirmed_missing=True)
             resp.raise_for_status()
             # Download to a temp file then rename atomically, so a
             # concurrent reader (or a crash mid-download) never sees a
@@ -122,6 +130,24 @@ class LocalDemProvider:
             try:
                 array, transform = self._get_tile_array(name)
             except TileUnavailable as exc:
+                if exc.confirmed_missing:
+                    # A 404 means 3DEP's own catalog -- near-complete for US
+                    # *land* -- confirms this tile doesn't exist. That's
+                    # strong enough evidence of open water on its own; a
+                    # second source's opinion isn't needed, and asking for
+                    # one is expensive (found directly: a coastal station
+                    # whose search radius crossed several such tiles timed
+                    # out well past 2 minutes waiting out the network
+                    # fallback's own retry/timeout budget for each one,
+                    # before defaulting to the same sea-level answer anyway).
+                    log.info(
+                        "DEM tile %s confirmed outside 3DEP coverage (open water); "
+                        "assuming sea level for %d point(s)",
+                        name, len(indices),
+                    )
+                    for i in indices:
+                        results[i] = 0.0
+                    continue
                 if self.fallback is None:
                     raise
                 log.warning("DEM tile %s unavailable (%s); falling back for %d point(s)", name, exc, len(indices))
@@ -141,6 +167,11 @@ class LocalDemProvider:
                 results[i] = float(array[row, col])
 
         if fallback_points:
+            # Everything reaching here is a download failure (network error,
+            # timeout, etc.), never a confirmed-missing tile -- those are
+            # handled above without involving the fallback at all. So an
+            # unknown-status area (could well be real land) stays unknown
+            # on failure here; propagate rather than guess.
             fallback_results = self.fallback.get_elevations(fallback_points)
             for idx, value in zip(fallback_indices, fallback_results):
                 results[idx] = value
