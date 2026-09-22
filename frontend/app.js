@@ -3,7 +3,7 @@ const API = "/api";
 // Matches radio-locator.com's published definitions, not an FCC standard,
 // so contours here are comparable to what people are used to seeing there:
 // FM local/distant/fringe = 60/50/40 dBu. AM's are given as mV/m of
-// horizontal groundwave (2.5/0.5/0.15); converted to dBu here to match the
+// groundwave (2.0/0.5/0.15 per their FAQ); converted to dBu here to match the
 // unit the rest of this app (and the backend) uses throughout.
 const THRESHOLD_PRESETS = {
   FM: [
@@ -12,7 +12,7 @@ const THRESHOLD_PRESETS = {
     { key: "fringe", label: "Fringe (40 dBu) — very weak, may not be usable", value: 40 },
   ],
   AM: [
-    { key: "local", label: "Local (68 dBu / 2.5 mV/m) — strong, reliable", value: 68 },
+    { key: "local", label: "Local (66 dBu / 2.0 mV/m) — strong, reliable", value: 66 },
     { key: "distant", label: "Distant (54 dBu / 0.5 mV/m) — needs a good radio", value: 54 },
     { key: "fringe", label: "Fringe (43.5 dBu / 0.15 mV/m) — very weak", value: 43.5 },
   ],

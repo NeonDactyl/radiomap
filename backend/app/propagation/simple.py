@@ -36,10 +36,46 @@ from .base import (
 
 
 class SimpleFmModel(PropagationModel):
-    name = "simple_fm_v4"  # bump this string whenever the math below changes -- see coverage_cache
+    name = "simple_fm_v5"  # bump this string whenever the math below changes -- see coverage_cache
 
     default_haat_m = 30.0
     receiver_height_m = 9.0  # ~30ft, the FCC's standard FM receive height
+
+    # HAAT (height above average terrain) is defined -- by the FCC, and by
+    # every third-party map that uses FCC-sourced data -- as antenna height
+    # above the *average ground elevation 1.5-10 miles from the tower*, not
+    # above the tower's own local ground. A tower sited on an isolated peak
+    # or in a local dip has a local elevation that differs meaningfully from
+    # that ring average, so approximating the antenna's AMSL height as
+    # (local tower ground elevation + HAAT) introduces a real, systematic
+    # error right where it matters most for the whole diffraction geometry.
+    # This computes the actual ring average from real elevation data instead.
+    HAAT_RING_MIN_KM = 1.5 * 1.60934
+    HAAT_RING_MAX_KM = 10.0 * 1.60934
+    HAAT_RING_RADIALS = 8
+    HAAT_RING_SAMPLES_PER_RADIAL = 9
+
+    def __init__(self, elevation_provider, canopy_provider=None):
+        super().__init__(elevation_provider, canopy_provider)
+        self._avg_terrain_elevation_cache: dict[int, float] = {}
+
+    def _average_terrain_elevation_m(self, station: Station) -> float:
+        cached = self._avg_terrain_elevation_cache.get(station.id)
+        if cached is not None:
+            return cached
+
+        points = []
+        for i in range(self.HAAT_RING_RADIALS):
+            bearing = (360.0 / self.HAAT_RING_RADIALS) * i
+            for j in range(self.HAAT_RING_SAMPLES_PER_RADIAL):
+                frac = j / (self.HAAT_RING_SAMPLES_PER_RADIAL - 1)
+                d = self.HAAT_RING_MIN_KM + (self.HAAT_RING_MAX_KM - self.HAAT_RING_MIN_KM) * frac
+                points.append(destination_point(station.lat, station.lon, bearing, d))
+
+        elevations = self.elevation.get_elevations(points)
+        avg = sum(elevations) / len(elevations)
+        self._avg_terrain_elevation_cache[station.id] = avg
+        return avg
 
     def field_strengths_along_bearing(
         self, station: Station, bearing_deg: float, distances_km: list[float]
@@ -56,7 +92,7 @@ class SimpleFmModel(PropagationModel):
             canopy = [self.canopy.canopy_height_m(lat, lon) for lat, lon in points]
 
         haat = station.haat_m if station.haat_m and station.haat_m > 0 else self.default_haat_m
-        tx_height_amsl = elevations[0] + haat
+        tx_height_amsl = self._average_terrain_elevation_m(station) + haat
         erp = station.erp_kw if station.erp_kw and station.erp_kw > 0 else 0.05
         radio_horizon_km = smooth_earth_radio_horizon_km(haat, self.receiver_height_m)
 

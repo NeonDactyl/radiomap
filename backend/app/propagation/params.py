@@ -6,7 +6,7 @@ endpoint asking for the same station with no explicit overrides).
 Threshold presets match radio-locator.com's published definitions (not
 ours) so contours are comparable to what people are used to seeing there:
 FM local/distant/fringe = 60/50/40 dBu; AM's are given as mV/m of
-horizontal groundwave (2.5/0.5/0.15), converted here to dBu (dB above 1
+groundwave (2.0/0.5/0.15 per their FAQ), converted here to dBu (dB above 1
 uV/m: dBu = 20*log10(mV/m * 1000)) since dBu is the unit our whole API
 already speaks in.
 """
@@ -23,7 +23,7 @@ def _mv_per_m_to_dbu(mv_per_m: float) -> float:
 THRESHOLD_PRESETS_DBU = {
     "FM": {"local": 60.0, "distant": 50.0, "fringe": 40.0},
     "AM": {
-        "local": round(_mv_per_m_to_dbu(2.5), 1),
+        "local": round(_mv_per_m_to_dbu(2.0), 1),
         "distant": round(_mv_per_m_to_dbu(0.5), 1),
         "fringe": round(_mv_per_m_to_dbu(0.15), 1),
     },

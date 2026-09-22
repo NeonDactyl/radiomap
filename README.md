@@ -108,7 +108,8 @@ take effect on browser refresh with no restart needed.
 3. Pick a signal-strength threshold, then "Show coverage" to draw the
    predicted coverage polygon. Thresholds are labeled **Local / Distant /
    Fringe**, matching radio-locator.com's published definitions (60/50/40
-   dBu for FM; 2.5/0.5/0.15 mV/m of groundwave for AM, converted to dBu) --
+   dBu for FM; 2.0/0.5/0.15 mV/m of groundwave for AM, per their FAQ,
+   converted to dBu) --
    not an FCC standard, chosen so contours here are comparable to what
    people already expect from that site. For AM stations you can also pick
    a ground-conductivity preset (affects groundwave range a lot). Max
@@ -222,6 +223,19 @@ required for correctness.
   calibrated to one reference point and ignores terrain and night skywave
   interference entirely. Treat AM contours as a much rougher estimate than
   FM.
+- **Directional antenna patterns aren't modeled -- every station is treated
+  as radiating uniformly in all directions.** We import the FCC's
+  `directional` flag for both AM and FM but don't use it: AM stations with
+  multiple towers can have precisely shaped patterns (cardioid, multi-lobe,
+  etc., from tower count/spacing/phasing), and directional FM stations
+  radiate less than their nameplate ERP off-axis. Real coverage for a
+  directional station will be smaller than predicted in its pattern's null
+  directions and is otherwise accurately predicted in this model only
+  along the bearing of *maximum* radiation. Fixing this means importing
+  actual antenna pattern data (relative field vs. azimuth, typically ~360
+  points) from the FCC's separate antenna pattern tables -- a real,
+  scoped follow-up (new importer + a per-bearing ERP multiplier in the
+  propagation models), not implemented here.
 - **Tree cover is architected but not wired to real data.**
   `backend/app/geo/landcover.py` defines a `CanopyProvider` interface that
   the FM model already calls for every terrain sample point, but it's
@@ -229,11 +243,16 @@ required for correctness.
   reachable canopy-height API was found while building this. Wiring in a
   real dataset (e.g. NLCD tree canopy, served from a locally downloaded
   raster) is a self-contained change to that one file.
-- **HAAT is used as if it were the tower's physical AMSL height** (ground
-  elevation at the tower + HAAT). Real HAAT is technically an average over
-  a ring around the tower, not the tower's own terrain-relative height --
-  a reasonable stand-in for a simple model, but a source of error right
-  near the tower.
+- **HAAT reference point (fixed).** Was: the antenna's AMSL height was
+  approximated as (ground elevation *at the tower* + HAAT). Per radio-locator's
+  own FAQ (and the actual FCC definition), HAAT is antenna height above the
+  *average* ground elevation 1.5-10 miles from the tower in each direction
+  -- not the tower's own local elevation, which can differ substantially
+  (confirmed for KWBL: the tower site sits 185m higher than the ring
+  average, because it's built on a foothill slope with lower plains pulling
+  the wider average down). `SimpleFmModel._average_terrain_elevation_m()`
+  now computes the real ring average from actual elevation data (8 radials
+  x 9 samples between 1.5-10mi) and uses that as the AMSL reference instead.
 - **Elevation data depends on a free public API** (Open-Meteo, SRTM-based,
   ~90m resolution). It's rate-limited; heavy use (e.g. computing coverage
   for many stations back-to-back, or a nationwide import) may hit 429s.
