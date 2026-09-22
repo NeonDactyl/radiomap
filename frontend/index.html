@@ -55,6 +55,13 @@
             <span>Max radius (km)</span>
             <input id="radius-input" type="number" min="5" max="400" step="5" placeholder="Auto">
           </label>
+          <label class="row" id="fm-model-row">
+            <span>FM physics</span>
+            <select id="fm-model-select">
+              <option value="simple" selected>Simple (FCC curve, fast)</option>
+              <option value="itm">Longley-Rice ITM (real physics, slower)</option>
+            </select>
+          </label>
           <label class="row" id="conductivity-row">
             <span>Ground</span>
             <select id="conductivity-select">

@@ -236,6 +236,7 @@ async function selectStation(id) {
   el("detail-table").innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
 
   el("conductivity-row").style.display = s.service === "AM" ? "flex" : "none";
+  el("fm-model-row").style.display = s.service === "FM" ? "flex" : "none";
   el("coverage-status").textContent = "";
 }
 
@@ -259,6 +260,8 @@ async function showCoverage() {
   }
   if (state.selected.service === "AM") {
     params.set("ground_conductivity_mmho", el("conductivity-select").value);
+  } else {
+    params.set("fm_model", el("fm-model-select").value);
   }
   if (el("refresh-checkbox").checked) {
     params.set("refresh", "true");

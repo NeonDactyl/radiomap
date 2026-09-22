@@ -22,14 +22,19 @@ from tower location, transmit power, and terrain.
   forest between a tower and a receiver adds to the blocking, not just
   bare ground height.
 - Predicts a coverage contour per station, rendered as a polygon on a
-  Leaflet map. FM uses the FCC's own real F(50,50) field-strength curve
-  (transcribed from the FCC's own reference implementation -- see
-  `backend/app/propagation/fcc_curves.py`) as the baseline, with real
-  single-direction terrain obstruction (actual DEM- and canopy-based
-  knife-edge diffraction) layered on top so a mountain range on one side
-  of a station comes out shorter than the open side. AM uses a simpler
-  groundwave approximation. See `backend/app/propagation/simple.py` for
-  details and known limitations of both.
+  Leaflet map. Two selectable FM models (pick "FM physics" in the UI, or
+  `?fm_model=simple|itm` on the API): **Simple** -- the FCC's own real
+  F(50,50) field-strength curve (transcribed from the FCC's own reference
+  implementation -- see `backend/app/propagation/fcc_curves.py`) as a
+  baseline, with real single-direction terrain obstruction (DEM- and
+  canopy-based knife-edge diffraction) layered on top; fast. **ITM** --
+  actual Longley-Rice point-to-point physics (multiple diffraction,
+  troposcatter, the LOS regime, not just one worst obstruction) via
+  `itmlogic`, a peer-reviewed Python port of NTIA's official algorithm --
+  see `backend/app/propagation/itm_model.py`; a bit slower, more
+  complete physics. AM uses a simpler groundwave approximation. See
+  `backend/app/propagation/simple.py` and `itm_model.py` for details and
+  known limitations of all three.
 - Attaches a programming genre/format where one exists in Wikidata (the FCC
   itself doesn't track this -- it's not something it regulates).
 - Caches computed coverage contours in SQLite (`coverage_cache`) so a
@@ -51,11 +56,14 @@ frontend/           Leaflet map, plain HTML/CSS/JS, no build step
 ```
 
 The propagation model is behind a small interface
-(`propagation/base.py: PropagationModel`) specifically so the v1 "simple"
-model (FCC curve baseline + single-knife-edge diffraction for FM;
-groundwave approximation for AM) can later be swapped for a full
-Longley-Rice / ITM implementation without touching the API or frontend.
-See the "Known limitations / next steps" section below.
+(`propagation/base.py: PropagationModel`) so implementations are
+swappable without touching the API or frontend -- which is how FM ended
+up with two: the original "Simple" model (FCC curve baseline +
+single-knife-edge diffraction) and a real Longley-Rice/ITM
+implementation, selectable per-request (`fm_model=simple|itm`). AM still
+uses a single groundwave approximation. See "The ITM model" under
+"Validation against known-real numbers" and "Known limitations / next
+steps" below.
 
 ## Setup
 
@@ -223,6 +231,56 @@ real Colorado and Utah mountain terrain:
   ranges near any US town. The model's shortest-range bearing landing
   exactly there, not some arbitrary direction, is the actual test.
 
+### The ITM model: real diffraction physics, not an approximation of it
+
+Everything above validates the *Simple* model (FCC curve + single-worst-
+obstruction knife-edge) as a good implementation of what it is -- a
+deliberately simplified approximation. It's still an approximation,
+documented as such throughout this README. The **ITM** model
+(`backend/app/propagation/itm_model.py`) is the actual alternative:
+Longley-Rice, the real industry-standard terrain propagation physics
+(multiple diffraction, troposcatter, the LOS regime), via `itmlogic`
+(github.com/edwardoughton/itmlogic) -- a Python port of NTIA's official
+ITM v1.2.2 algorithm, published and peer-reviewed in the Journal of Open
+Source Software (Oughton et al., 2020, DOI 10.21105/joss.02266).
+
+Verified directly, not trusted on the paper's say-so: ran itmlogic's own
+pinned test case -- the classic Longley-Rice reference path (Crystal
+Palace, South London to Mursley, Buckinghamshire, traced to Stark 1967,
+not just self-referential) -- and got an exact, bit-for-bit match on all
+6 of their pinned expected transmission-loss values (see
+`backend/tests/test_itm_calibration.py`). Also caught and fixed a real
+off-by-one bug introduced while writing that test (range-step computed as
+`distance/n` instead of `distance/(n-1)`) precisely because the pinned
+reference values caught it -- the kind of error a "looks plausible"
+spot-check would have missed entirely.
+
+Compared directly against the Simple model on KBCO-FM (the same
+radio-locator-cited station above): ITM predicts **consistently higher**
+field strength on the open (east) side -- up to +25 dB at 80km -- and
+more complex, non-monotonic behavior on the mountain (west) side (real
+diffraction/multipath over specific terrain, not a smooth curve). The
+east-side gap is independent corroboration of the "possible
+double-counting" concern flagged in the Kansas section above: Simple's
+extra terrain-specific loss stacked on top of a curve that may already
+represent some average terrain effect looks like it *is* somewhat
+overcautious on open ground, exactly where ITM (real physics, no such
+stacking) predicts more range.
+
+Performance: ITM's own computation is cheap (~10-25ms per point); the
+per-point terrain profile fetch (same elevation pipeline as Simple)
+dominates. A full 24-bearing sweep on a completely cold cache took ~20s
+in testing -- comparable to Simple, not meaningfully slower in practice.
+
+Not (yet) the default: this is a substantial, newly-built integration,
+and its results differ meaningfully from Simple's (see above) -- exposed
+as an explicit, selectable choice (`fm_model=simple|itm`, defaulting to
+`simple`) rather than silently changing what every existing user sees.
+Ground/atmosphere parameters (permittivity, conductivity, climate zone,
+refractivity) are fixed at reasonable US-average defaults, not
+region-specific -- a real, documented simplification, same spirit as the
+AM model's single "average ground" constant.
+
 ## Running the integration tests
 
 Most of the test suite (`pytest tests/`) is fast, pure-logic, and has no
@@ -332,11 +390,14 @@ required for correctness.
   reaches further over open plains than into a mountain range) still
   comes entirely from the separate real-terrain knife-edge diffraction
   layered on top, which only checks the single worst obstruction per path
-  and doesn't model multiple/cascaded diffraction or troposcatter. The
-  natural next step for more accuracy than either piece offers is a full
-  **Longley-Rice / ITM** implementation behind the same `PropagationModel`
-  interface -- see `backend/app/propagation/base.py` and `simple.py` for
-  the seam.
+  and doesn't model multiple/cascaded diffraction or troposcatter. **This
+  is now addressed by the ITM model** (`fm_model=itm`) -- real
+  Longley-Rice physics behind the same `PropagationModel` interface, not
+  a future item anymore -- see "The ITM model" section above for what it
+  is and how it was validated. Simple remains the default (fast,
+  well-calibrated for the flat case) since ITM is a newer, less
+  battle-tested integration; not yet promoted to default pending more
+  real-world comparison.
 - **Coverage boundary per bearing is the last point before a *sustained*
   drop below threshold** (the next couple of samples also below it) --
   not the first drop, and not the farthest qualifying point anywhere on

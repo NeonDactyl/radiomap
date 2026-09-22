@@ -188,6 +188,11 @@ def get_coverage(
     n_bearings: int | None = Query(None, ge=8, le=90),
     step_km: float | None = None,
     ground_conductivity_mmho: float = Query(5.0, gt=0, description="AM only: 1=poor/rocky, 5=average, 15=rich soil"),
+    fm_model: str = Query(
+        "simple", pattern="^(simple|itm)$",
+        description="FM only: 'simple' (FCC curve + knife-edge, fast) or "
+        "'itm' (real Longley-Rice point-to-point physics, see propagation/itm_model.py)",
+    ),
     refresh: bool = Query(False, description="Recompute even if a cached contour exists for these exact params"),
 ):
     conn = get_conn()
@@ -215,6 +220,7 @@ def get_coverage(
     params = resolve_coverage_params(
         station, threshold_dbu=threshold_dbu, max_radius_km=max_radius_km,
         step_km=step_km, n_bearings=n_bearings, ground_conductivity_mmho=ground_conductivity_mmho,
+        fm_model=fm_model,
     )
     model = get_model(station.service, elevation_provider, canopy_provider, **params)
 

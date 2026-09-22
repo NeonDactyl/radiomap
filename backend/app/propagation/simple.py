@@ -167,6 +167,10 @@ class SimpleAmModel(PropagationModel):
 def get_model(service: str, elevation_provider, canopy_provider=None, **kwargs) -> PropagationModel:
     service = service.upper()
     if service == "FM":
+        fm_model = kwargs.get("fm_model", "simple")
+        if fm_model == "itm":
+            from .itm_model import ItmFmModel
+            return ItmFmModel(elevation_provider, canopy_provider)
         return SimpleFmModel(elevation_provider, canopy_provider)
     if service == "AM":
         return SimpleAmModel(

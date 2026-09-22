@@ -48,6 +48,7 @@ def resolve_coverage_params(
     step_km: float | None = None,
     n_bearings: int | None = None,
     ground_conductivity_mmho: float = 5.0,
+    fm_model: str = "simple",
 ) -> dict:
     resolved_threshold = threshold_dbu if threshold_dbu is not None else default_threshold_dbu(station.service)
 
@@ -71,6 +72,7 @@ def resolve_coverage_params(
         "step_km": resolved_step,
         "n_bearings": resolved_n_bearings,
         "ground_conductivity_mmho": ground_conductivity_mmho,
+        "fm_model": fm_model,
     }
 
 
