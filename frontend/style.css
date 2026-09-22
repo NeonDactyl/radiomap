@@ -214,3 +214,77 @@ select, input[type=number], input[type=search] {
 .station-marker-am { color: var(--am-color); }
 
 .leaflet-popup-content { font-size: 0.85rem; }
+
+@media (max-width: 760px) {
+  #topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .topbar-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .topbar-controls label { width: 100%; min-width: 0; }
+  .topbar-controls select { flex: 1; min-width: 0; }
+
+  /* Map on top, sidebar below -- map stays primary/full-width, sidebar
+     becomes a fixed-height scrollable panel instead of a 320px side rail
+     that would otherwise crush the map into a sliver. */
+  #body { flex-direction: column; }
+
+  /* Percentages of #body's own (already topbar-aware) height, not vh --
+     vh ignores how tall the stacked topbar controls actually render, which
+     on a short viewport let map+sidebar demand more height than was left
+     and forced the whole page to scroll. min-height:0 overrides the flex
+     default content-based floor so each side actually shrinks to its
+     allotted share and scrolls internally instead (station-list and
+     detail-panel already have their own overflow-y:auto for this). */
+  #map {
+    order: 1;
+    flex: 1 1 55%;
+    min-height: 0;
+  }
+
+  #sidebar {
+    order: 2;
+    flex: 1 1 45%;
+    min-height: 0;
+    width: 100%;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Selecting a station hides the list so the detail panel (and its
+     coverage controls) get the full sidebar height instead of squeezing
+     into whatever's left under a short list -- the close button already
+     clears the selection, which un-hides the list again. */
+  #sidebar.has-selection #station-list-wrap { display: none; }
+  #sidebar.has-selection #detail-panel { max-height: 100%; }
+
+  /* Bigger touch targets throughout -- default sizing is comfortable with
+     a mouse but too tight to tap reliably. */
+  select, input[type=number], input[type=search] {
+    padding: 0.55rem 0.6rem;
+    font-size: 1rem;
+  }
+
+  #station-list li { padding: 0.65rem 0.5rem; font-size: 0.92rem; }
+
+  #coverage-controls .row { font-size: 0.9rem; }
+  #coverage-controls .row select,
+  #coverage-controls .row input:not([type=checkbox]) { max-width: 55%; }
+  #coverage-controls .row input[type=checkbox] { width: 1.3rem; height: 1.3rem; }
+
+  #coverage-btn { padding: 0.7rem; font-size: 1rem; }
+
+  #detail-close {
+    padding: 0.4rem;
+    font-size: 1.5rem;
+  }
+}

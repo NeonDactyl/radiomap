@@ -230,6 +230,7 @@ function clearSelection() {
   state.selected = null;
   state.coverageLayer.clearLayers();
   el("detail-panel").classList.add("hidden");
+  el("sidebar").classList.remove("has-selection");
   updateUrl();
 }
 
@@ -249,6 +250,7 @@ async function selectStation(id) {
   if (marker) marker.openTooltip();
 
   el("detail-panel").classList.remove("hidden");
+  el("sidebar").classList.add("has-selection");
   el("detail-callsign").textContent = `${s.callsign} — ${freqLabel(s)}`;
   el("detail-sub").textContent = `${s.city || "?"}, ${s.state || "?"} &middot; ${s.licensee || "Unknown licensee"}`.replace("&middot;", "·");
 
