@@ -260,6 +260,9 @@ async function showCoverage() {
   if (state.selected.service === "AM") {
     params.set("ground_conductivity_mmho", el("conductivity-select").value);
   }
+  if (el("refresh-checkbox").checked) {
+    params.set("refresh", "true");
+  }
 
   try {
     const res = await fetch(`${API}/stations/${state.selected.id}/coverage?${params}`);

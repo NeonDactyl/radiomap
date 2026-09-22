@@ -183,7 +183,8 @@ select, input[type=number], input[type=search] {
 }
 
 #coverage-controls .row select,
-#coverage-controls .row input { flex: 1; max-width: 60%; }
+#coverage-controls .row input:not([type=checkbox]) { flex: 1; max-width: 60%; }
+#coverage-controls .row input[type=checkbox] { flex: 0 0 auto; width: 1.1rem; height: 1.1rem; }
 
 #coverage-btn {
   width: 100%;
