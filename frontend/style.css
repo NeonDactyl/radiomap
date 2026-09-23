@@ -182,9 +182,7 @@ select, input[type=number], input[type=search] {
   gap: 0.5rem;
 }
 
-#coverage-controls .row select,
-#coverage-controls .row input:not([type=checkbox]) { flex: 1; max-width: 60%; }
-#coverage-controls .row input[type=checkbox] { flex: 0 0 auto; width: 1.1rem; height: 1.1rem; }
+#coverage-controls .row select { flex: 1; max-width: 60%; }
 
 #coverage-btn {
   width: 100%;
@@ -294,9 +292,7 @@ select, input[type=number], input[type=search] {
   #station-list li { padding: 0.65rem 0.5rem; font-size: 0.92rem; }
 
   #coverage-controls .row { font-size: 0.9rem; }
-  #coverage-controls .row select,
-  #coverage-controls .row input:not([type=checkbox]) { max-width: 55%; }
-  #coverage-controls .row input[type=checkbox] { width: 1.3rem; height: 1.3rem; }
+  #coverage-controls .row select { max-width: 55%; }
 
   #coverage-btn { padding: 0.7rem; font-size: 1rem; }
 
