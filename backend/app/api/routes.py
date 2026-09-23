@@ -111,7 +111,11 @@ def list_genres(service: str | None = Query(None, pattern="^(FM|AM)$")):
 
 @router.get("/meta/seed-status")
 def seed_status():
-    return dataclasses.asdict(background_seeder.status)
+    """One entry per precompute lane (currently "simple" and "itm" -- see
+    background_seeder.py), each independently working through the station
+    list so a slow ITM pass can't hold up the fast simple-model pass.
+    """
+    return {name: dataclasses.asdict(status) for name, status in background_seeder.statuses.items()}
 
 
 @router.get("/stations", response_model=list[StationOut])

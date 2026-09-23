@@ -326,19 +326,33 @@ To avoid paying the first-computation cost live (e.g. so the map feels
 instant for anyone browsing after setup), precompute coverage ahead of
 time -- either automatically, or on demand:
 
-**Automatic**: `backend/app/background_seeder.py` starts a daemon thread
-with the server (set `RADIO_MAP_DISABLE_SEEDER=1` to turn it off) that
-slowly works through every imported station in the background, pacing
-itself (0.75s between FM attempts -- AM needs no throttling, it's pure
-math with no terrain dependency) so it doesn't hammer the free elevation
-APIs. Check progress at `GET /api/meta/seed-status`
-(`{running, total_stations, processed, newly_computed, already_cached,
-errors, current, caught_up}`). It idles 10 minutes between full passes so
-newly-imported stations eventually get picked up without a restart. Real
-regional data gaps (confirmed: parts of Alaska return no response at all
-from either elevation source) will show up as `errors`, not silently
-hang -- see "Known limitations" for the circuit-breaker that makes that
-possible instead of a multi-minute stall per bad station.
+**Automatic**: `backend/app/background_seeder.py` starts one daemon thread
+per precompute "lane" with the server (set `RADIO_MAP_DISABLE_SEEDER=1` to
+turn all of them off). Each lane independently works through every
+imported station in the background: `simple` (the FCC-curve model, the
+UI's default) and `itm` (the Longley-Rice model, FM only -- see "The ITM
+model" above). They run concurrently rather than one-after-the-other,
+specifically so the much slower ITM pass can't hold up the fast simple
+pass or vice versa -- if you want everything a shared link might need
+precomputed ahead of time regardless of which FM physics someone picks,
+both are already being warmed at once without you having to sequence
+them. Each paces itself (`simple`: 0.75s between FM attempts; `itm`: 0.1s,
+since its own per-station compute time already paces things and it's
+usually reusing DEM tiles the `simple` pass already pulled down; AM needs
+no throttling either way, it's pure math with no terrain dependency) so
+neither hammers the free elevation APIs. Check progress at
+`GET /api/meta/seed-status`, now one entry per lane:
+`{simple: {running, total_stations, processed, newly_computed,
+already_cached, errors, current, caught_up}, itm: {...}}`. Each idles 10
+minutes between full passes so newly-imported stations eventually get
+picked up without a restart. Real regional data gaps (confirmed: parts of
+Alaska return no response at all from either elevation source) will show
+up as `errors`, not silently hang -- see "Known limitations" for the
+circuit-breaker that makes that possible instead of a multi-minute stall
+per bad station. Running two lanes concurrently means coverage_cache and
+elevation_cache now see genuinely concurrent reads/writes (plus whatever
+live requests come in); `db.py` turns on WAL mode specifically so that
+doesn't produce "database is locked" errors under normal load.
 
 **On demand**: the same underlying logic as a one-shot CLI run, useful
 for prioritizing specific states instead of waiting for the seeder to
@@ -348,6 +362,7 @@ reach them:
 # from backend/, with the venv active
 python -m app.importers.precompute_coverage --states CA
 python -m app.importers.precompute_coverage --service FM --states all --delay 0.5
+python -m app.importers.precompute_coverage --service FM --states all --fm-model itm
 ```
 
 Both skip anything already cached, so either is safe to re-run (e.g.

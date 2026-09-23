@@ -4,6 +4,7 @@ so live requests hit coverage_cache instead of computing on the spot.
 Usage (from backend/, with the venv active):
     python -m app.importers.precompute_coverage --states CA
     python -m app.importers.precompute_coverage --service FM --states all --delay 0.5
+    python -m app.importers.precompute_coverage --service FM --states all --fm-model itm
 
 Uses the exact same default-parameter resolution as the live /coverage
 endpoint (propagation/params.py), so a precomputed entry is guaranteed to
@@ -24,18 +25,22 @@ from ..propagation.simple import get_model
 log = logging.getLogger(__name__)
 
 
-def precompute_for_station(row) -> str:
+def precompute_for_station(row, fm_model: str = "simple") -> str:
     """Returns "computed", "cached" (already had a matching entry), or
     "failed" (elevation was unavailable -- not the same as "cached" and
     must not be treated as such by a caller, or a real, persistent failure
     would be silently indistinguishable from routine cache reuse).
+
+    `fm_model` is ignored for AM rows (AM has no ITM option -- see
+    propagation/simple.py's get_model), so calling this with fm_model="itm"
+    on an AM row just does the normal simple-model AM computation.
     """
     station = Station(
         id=row["id"], callsign=row["callsign"], service=row["service"],
         frequency_mhz=row["frequency_mhz"], erp_kw=row["erp_kw"], haat_m=row["haat_m"],
         lat=row["lat"], lon=row["lon"], directional=bool(row["directional"]),
     )
-    params = resolve_coverage_params(station)
+    params = resolve_coverage_params(station, fm_model=fm_model)
     model = get_model(station.service, elevation_provider, canopy_provider, **params)
 
     if coverage_cache.lookup(station.id, model.name, params) is not None:
@@ -54,7 +59,7 @@ def precompute_for_station(row) -> str:
     return "computed"
 
 
-def run(service: str, states: list[str] | None, delay: float) -> None:
+def run(service: str, states: list[str] | None, delay: float, fm_model: str = "simple") -> None:
     db.init_db()
     conn = db.get_conn()
     try:
@@ -77,7 +82,7 @@ def run(service: str, states: list[str] | None, delay: float) -> None:
     log.info("Precomputing coverage for %d stations", len(rows))
     computed = cached = failed = 0
     for i, row in enumerate(rows):
-        result = precompute_for_station(row)
+        result = precompute_for_station(row, fm_model=fm_model)
         if result == "computed":
             computed += 1
             if delay:
@@ -106,12 +111,16 @@ def main() -> None:
         "--delay", type=float, default=0.1,
         help="Seconds to sleep after each newly-computed station (politeness to the elevation API)",
     )
+    parser.add_argument(
+        "--fm-model", choices=["simple", "itm"], default="simple",
+        help="Which FM propagation model to precompute (ignored for AM rows -- AM has no ITM option)",
+    )
     args = parser.parse_args()
 
     states = None if args.states.strip().lower() == "all" else [
         s.strip().upper() for s in args.states.split(",") if s.strip()
     ]
-    run(args.service, states, args.delay)
+    run(args.service, states, args.delay, fm_model=args.fm_model)
 
 
 if __name__ == "__main__":

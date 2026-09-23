@@ -60,9 +60,16 @@ CREATE TABLE IF NOT EXISTS coverage_cache (
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets readers and writers proceed concurrently instead of
+    # blocking each other (the default rollback journal serializes any
+    # writer against everyone else) -- needed now that multiple background
+    # seeder lanes (simple + ITM precompute) and live requests can all be
+    # reading/writing coverage_cache and elevation_cache at once.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
