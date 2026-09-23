@@ -19,7 +19,17 @@ const THRESHOLD_PRESETS = {
 };
 const DEFAULT_THRESHOLD_KEY = "distant";
 
-const MIN_ZOOM_TO_LOAD = 6; // below this, a viewport bbox is too big to be a useful "stations here" list
+// Comfortably above the total station count of either service nationwide
+// (~11.4k FM, ~4.3k AM) -- with marker clustering handling the rendering
+// side, there's no more need to cap how much of a wide viewport's data we
+// actually fetch (a fixed row cap with no ORDER BY was previously making
+// wide views silently show only whichever handful of states happened to
+// sit first in the table).
+const VIEWPORT_FETCH_LIMIT = 20000;
+// Above this, render only a prefix of the sidebar list (all stations still
+// get a clustered marker either way) -- a few thousand <li> elements is
+// real DOM weight for no benefit when nobody scrolls that far.
+const LIST_RENDER_CAP = 500;
 
 const state = {
   service: "FM",
@@ -38,7 +48,11 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 18,
 }).addTo(map);
 
-state.markerLayer = L.layerGroup().addTo(map);
+state.markerLayer = L.markerClusterGroup({
+  showCoverageOnHover: false,
+  maxClusterRadius: 60,
+});
+map.addLayer(state.markerLayer);
 state.coverageLayer = L.layerGroup().addTo(map);
 
 const el = (id) => document.getElementById(id);
@@ -121,44 +135,50 @@ async function loadStationsInView() {
   if (el("station-search").value.trim().length >= 2) return;
 
   clearSelection();
-  if (map.getZoom() < MIN_ZOOM_TO_LOAD) {
-    state.stations = [];
-    showStations([]);
-    el("station-count").textContent = "Zoom in to see stations here";
-    return;
-  }
   const b = map.getBounds();
   const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].join(",");
-  const params = new URLSearchParams({ service: state.service, bbox, limit: "1500" });
+  const params = new URLSearchParams({ service: state.service, bbox, limit: String(VIEWPORT_FETCH_LIMIT) });
   if (state.genre) params.set("genre", state.genre);
   const res = await fetch(`${API}/stations?${params}`);
   state.stations = await res.json();
-  showStations(state.stations);
+  const totalMatching = res.headers.get("X-Total-Matching");
+  showStations(state.stations, totalMatching ? Number(totalMatching) : null);
 }
 
-function showStations(stations) {
-  el("station-count").textContent = `${stations.length} stations`;
+function showStations(stations, totalMatching) {
+  // Only relevant if a viewport somehow still exceeds VIEWPORT_FETCH_LIMIT
+  // (see /api/stations) -- shouldn't happen at this dataset's size, but if
+  // it ever does, say so rather than silently showing a partial view.
+  el("station-count").textContent =
+    totalMatching && totalMatching > stations.length
+      ? `${stations.length} of ${totalMatching} stations (zoom in to see them all)`
+      : `${stations.length} stations`;
   renderMarkers(stations);
-  renderList(stations);
+  renderList(stations.length > LIST_RENDER_CAP ? stations.slice(0, LIST_RENDER_CAP) : stations);
+}
+
+function stationIcon(service) {
+  const color = service === "FM" ? "#2f6f4f" : "#2e5c8a";
+  return L.divIcon({
+    className: "station-dot",
+    html: `<span style="background:${color}"></span>`,
+    iconSize: [12, 12],
+  });
 }
 
 function renderMarkers(stations) {
   state.markerLayer.clearLayers();
   state.markersById.clear();
-  const color = state.service === "FM" ? "#2f6f4f" : "#2e5c8a";
-  for (const s of stations) {
-    const marker = L.circleMarker([s.lat, s.lon], {
-      radius: 5,
-      color,
-      weight: 1,
-      fillColor: color,
-      fillOpacity: 0.75,
-    });
+  const markers = stations.map((s) => {
+    const marker = L.marker([s.lat, s.lon], { icon: stationIcon(s.service) });
     marker.bindTooltip(`${s.callsign} — ${freqLabel(s)}`);
     marker.on("click", () => selectStation(s.id));
-    marker.addTo(state.markerLayer);
     state.markersById.set(s.id, marker);
-  }
+    return marker;
+  });
+  // addLayers() is markercluster's bulk-add API -- one index rebuild
+  // instead of one per marker, which matters once this can be thousands.
+  state.markerLayer.addLayers(markers);
 }
 
 function renderList(stations) {
@@ -194,7 +214,8 @@ async function runSearch(text) {
   const res = await fetch(`${API}/stations?${params}`);
   const results = await res.json();
   state.stations = results;
-  showStations(results);
+  const totalMatching = res.headers.get("X-Total-Matching");
+  showStations(results, totalMatching ? Number(totalMatching) : null);
 }
 
 function parseUrlState() {
@@ -245,9 +266,19 @@ async function selectStation(id) {
     li.classList.toggle("selected", Number(li.dataset.id) === id);
   });
 
-  panWithoutTriggeringReload(() => map.panTo([s.lat, s.lon]));
   const marker = state.markersById.get(id);
-  if (marker) marker.openTooltip();
+  panWithoutTriggeringReload(() => {
+    // zoomToShowLayer breaks the marker out of its cluster if it's
+    // currently grouped (and is a no-op movement if it's already visible)
+    // -- a plain panTo left clustered stations selected-but-invisible,
+    // since a marker hidden inside an unexpanded cluster isn't actually on
+    // the map for openTooltip() to anchor to.
+    if (marker) {
+      state.markerLayer.zoomToShowLayer(marker, () => marker.openTooltip());
+    } else {
+      map.panTo([s.lat, s.lon]);
+    }
+  });
 
   el("detail-panel").classList.remove("hidden");
   el("sidebar").classList.add("has-selection");

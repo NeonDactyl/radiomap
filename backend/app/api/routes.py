@@ -1,7 +1,7 @@
 import dataclasses
 import sqlite3
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from .. import background_seeder, coverage_cache
 from ..db import get_conn
@@ -129,7 +129,14 @@ def list_stations(
         None, description="min_lon,min_lat,max_lon,max_lat -- only return stations inside this box"
     ),
     genre: str | None = Query(None, description="Exact genre string, as returned by /meta/genres"),
-    limit: int = Query(2000, le=5000),
+    limit: int = Query(
+        2000, le=20000,
+        description="Raised well above the total number of stations of either service "
+        "nationwide (~11.4k FM, ~4.3k AM) so a viewport request can ask for everything "
+        "matching and rely on client-side marker clustering, rather than the server "
+        "silently truncating to an arbitrary geographic subset.",
+    ),
+    response: Response = None,
 ):
     clauses = []
     params: list = []
@@ -155,15 +162,28 @@ def list_stations(
         params.extend([min_lon, max_lon, min_lat, max_lat])
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    sql = f"SELECT {STATION_COLUMNS} FROM stations {where} LIMIT ?"
-    params.append(limit)
 
     conn = get_conn()
     try:
-        rows = conn.execute(sql, params).fetchall()
-        return [_row_to_station_out(r) for r in rows]
+        total = conn.execute(f"SELECT COUNT(*) c FROM stations {where}", params).fetchone()["c"]
+        # No ORDER BY normally -- table order is fine and fastest when
+        # everything fits under `limit`. But when a query matches more rows
+        # than that (typically a whole-country viewport, where the table's
+        # state-by-state import order would otherwise return an arbitrary
+        # geographic prefix -- e.g. only whichever handful of states happen
+        # to be first in the table -- and silently hide every other state),
+        # order randomly so a truncated result is at least a representative
+        # sample of the whole match set instead of a misleading chunk of it.
+        order = "ORDER BY RANDOM()" if total > limit else ""
+        sql = f"SELECT {STATION_COLUMNS} FROM stations {where} {order} LIMIT ?"
+        rows = conn.execute(sql, params + [limit]).fetchall()
     finally:
         conn.close()
+
+    if response is not None:
+        response.headers["X-Total-Matching"] = str(total)
+        response.headers["X-Truncated"] = "true" if total > len(rows) else "false"
+    return [_row_to_station_out(r) for r in rows]
 
 
 @router.get("/stations/{station_id}", response_model=StationDetail)

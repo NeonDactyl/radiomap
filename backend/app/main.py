@@ -16,6 +16,11 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Browsers only expose a small whitelisted set of response headers to
+    # fetch()/XHR by default -- these two (see /api/stations) need an
+    # explicit opt-in to be readable cross-origin. Same-origin requests
+    # (the normal deployment) can already read them regardless.
+    expose_headers=["X-Total-Matching", "X-Truncated"],
 )
 
 
