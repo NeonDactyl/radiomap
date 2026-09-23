@@ -4,7 +4,7 @@ Usage (run from backend/):
     python -m app.importers.cli --service fm --states CA,NV,OR
     python -m app.importers.cli --service am --states all
     python -m app.importers.cli --service both --states all
-    python -m app.importers.cli --genres              # attach Wikidata genre/format data
+    python -m app.importers.cli --genres              # attach genre/format data (Wikidata, then Wikipedia fallback)
     python -m app.importers.cli --states CA --genres  # do both in one run
 """
 import argparse
@@ -12,7 +12,7 @@ import logging
 import time
 
 from .. import db
-from . import common, fcc_am, fcc_fm, wikidata_genre
+from . import common, fcc_am, fcc_fm, wikidata_genre, wikipedia_genre
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +74,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--genres", action="store_true",
-        help="Also (or only, with --skip-stations) attach Wikidata radio-format data",
+        help="Also (or only, with --skip-stations) attach genre/format data: Wikidata's "
+        "structured P415 first, then a Wikipedia-infobox fallback for whatever's still missing",
     )
     parser.add_argument(
         "--skip-stations", action="store_true",
@@ -92,6 +93,7 @@ def main() -> None:
 
     if args.genres:
         wikidata_genre.import_genres()
+        wikipedia_genre.import_genres()
 
 
 if __name__ == "__main__":

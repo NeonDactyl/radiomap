@@ -8,3 +8,4 @@ backend/data/*.sqlite3
 backend/data/dem_tiles/
 .DS_Store
 screenshots/
+.claude/

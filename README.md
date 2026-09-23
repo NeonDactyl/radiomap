@@ -35,8 +35,10 @@ from tower location, transmit power, and terrain.
   complete physics. AM uses a simpler groundwave approximation. See
   `backend/app/propagation/simple.py` and `itm_model.py` for details and
   known limitations of all three.
-- Attaches a programming genre/format where one exists in Wikidata (the FCC
-  itself doesn't track this -- it's not something it regulates).
+- Attaches a programming genre/format where one exists in Wikidata, falling
+  back to parsing it straight out of the station's Wikipedia infobox where
+  Wikidata doesn't have it structured yet (the FCC itself doesn't track
+  this at all -- it's not something it regulates).
 - Caches computed coverage contours in SQLite (`coverage_cache`) so a
   repeat request for the same station/params is instant, and runs a
   background seeder that slowly precomputes it for every station
@@ -98,8 +100,10 @@ Re-running an import updates existing stations in place (matched by FCC
 facility ID) rather than duplicating them, so it's safe to re-run
 periodically to pick up license changes.
 
-To attach genre/format data (from Wikidata, keyed by the same FCC facility
-ID -- see "Known limitations" below on coverage):
+To attach genre/format data -- Wikidata's structured `P415` property
+first, then a Wikipedia-infobox fallback for whatever Wikidata doesn't
+have yet, both keyed by the same FCC facility ID (see "Known limitations"
+below on coverage and provenance):
 
 ```bash
 python -m app.importers.cli --genres --skip-stations   # genres only, no re-fetch from FCC
@@ -534,8 +538,34 @@ required for correctness.
   by `country == 'US'` -- a couple of them carried a garbage 2-letter
   "state" value that happened to collide with a real US state code, so
   this filter runs before the state field is trusted for anything.
-- **Genre/format coverage is partial (~16% of stations).** Wikidata's
-  "radio format" property (P415) is filled in for some US stations,
-  skewed toward larger/more notable ones -- there's no comprehensive free
-  source for this since the FCC doesn't track it. Most stations will show
-  "format unknown," which is an honest reflection of the data, not a bug.
+- **Genre/format coverage is now ~79% of stations (fixed, was ~16%).**
+  Wikidata's structured "radio format" property (P415) alone only covers
+  ~16% of US stations, skewed toward larger/more notable ones -- there's
+  no comprehensive free *structured* source for this since the FCC doesn't
+  track it at all. `backend/app/importers/wikipedia_genre.py` closes most
+  of that gap as a fallback: for a station whose Wikidata item links to an
+  English Wikipedia article but has no P415 claim, it parses the `format`
+  field straight out of that article's infobox wikitext instead of
+  treating a missing structured claim as "no data." A live bulk run found
+  a genuine format value in ~90% of those candidates. This is free text,
+  not a controlled vocabulary, so expect messier/more varied values than
+  Wikidata's own (occasional "Defunct (formerly X)" annotations, several
+  formats joined by comma for daypart splits, etc) -- and it's strictly a
+  fallback, never overwriting a value Wikidata already had. The remaining
+  ~21% of stations genuinely have neither source (no Wikipedia article at
+  all, or an article whose infobox has no format field), so "format
+  unknown" for those is still an honest reflection of the data, not a bug.
+  Building this surfaced two implementation lessons worth flagging for
+  future importers hitting Wikimedia's APIs: (1) a browser-spoofing
+  `User-Agent` gets rate-limited *harder*, not more leniently -- the first
+  bulk run got 429'd on the majority of its requests until `config.py`'s
+  shared `HTTP_HEADERS` was changed to an honest, descriptive UA per
+  [Wikimedia's policy](https://meta.wikimedia.org/wiki/User-Agent_policy);
+  (2) parsing real wikitext means handling real messiness (piped
+  wikilinks, `{{hlist}}`/`{{ubl}}`/`{{plainlist}}` list templates,
+  `{{small|...}}`/`<small>` wrappers, a `{{coord}}` template that happens
+  to have its own unrelated `format=` parameter) -- the importer rejects a
+  value outright (stores nothing rather than a wikitext fragment) if
+  anything still looks unparsed after cleanup, verified by scanning the
+  full result of a real bulk run for markup residue, not just a
+  pre-launch sample.

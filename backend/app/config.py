@@ -29,8 +29,15 @@ FRONTEND_DIR = BASE_DIR.parent / "frontend"
 FCC_FM_QUERY_URL = "https://transition.fcc.gov/fcc-bin/fmq"
 FCC_AM_QUERY_URL = "https://transition.fcc.gov/fcc-bin/amq"
 
+# A real, honest User-Agent, not a spoofed browser one. This matters most
+# for the Wikimedia APIs (Wikidata SPARQL, Wikipedia's own API): their
+# published UA policy explicitly rate-limits/blocks generic or
+# browser-faked User-Agents *harder*, not more leniently -- confirmed
+# directly when a bulk Wikipedia genre-backfill run got 429'd on the vast
+# majority of its requests using the old "Mozilla/5.0 (compatible; ...)"
+# string. https://meta.wikimedia.org/wiki/User-Agent_policy
 HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; radio-map-importer/1.0)"
+    "User-Agent": "radio-map-importer/1.0 (https://github.com/NeonDactyl/radiomap)"
 }
 
 # Open-Meteo elevation API: free, no key, up to 100 points per request.
