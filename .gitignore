@@ -9,3 +9,4 @@ backend/data/dem_tiles/
 .DS_Store
 screenshots/
 .claude/
+backend/check_seed_progress.py
