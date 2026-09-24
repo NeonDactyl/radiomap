@@ -13,6 +13,14 @@ the point-API regional gaps this project hit directly (confirmed: parts
 of Alaska returned no response at all from USGS EPQS; the equivalent DEM
 tile downloads and reads fine).
 
+The *decoded, in-memory* copy of each tile (tens of MB apiece) is a
+separate matter from the on-disk file: it's evicted after TILE_CACHE_TTL_S
+unused, re-read from the already-downloaded local file (not re-fetched
+over the network) on the next request. A real long-running server OOM'd
+without this -- a full background-seeder pass touches a few hundred
+distinct tiles nationwide, and nothing was ever bounding how many stayed
+resident in RAM.
+
 Falls back to the network-based ElevationProvider (Open-Meteo + USGS
 EPQS) only for points whose tile can't be downloaded -- true gaps in
 3DEP's own coverage (some remote US territories) or a transient network
@@ -22,6 +30,7 @@ import logging
 import math
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import requests
@@ -31,6 +40,21 @@ from ..config import DEM_TILE_BASE_URL, DEM_TILE_DIR, HTTP_HEADERS
 log = logging.getLogger(__name__)
 
 TILE_DOWNLOAD_TIMEOUT_S = 30
+
+# How long a *decoded, in-memory* tile array sticks around after its last
+# use. The downloaded .tif on disk is still kept forever (terrain doesn't
+# change -- see module docstring), but a long-running process (the
+# background seeder walks every station nationwide, touching a few hundred
+# distinct 1x1-degree tiles over a full pass) was never evicting the
+# decoded numpy arrays from RAM, which OOM'd a real server. Each array is
+# tens of MB, and nothing bounded how many stayed resident.
+TILE_CACHE_TTL_S = 30 * 60
+# How often an eviction sweep runs, decoupled from any single tile's
+# lookup -- otherwise a provider that keeps hitting a rotating set of
+# *different* tiles (exactly the seeder's access pattern) would only ever
+# take the cache-miss/download path for each one and never revisit, let
+# alone sweep, the entries it already has cached.
+SWEEP_INTERVAL_S = 60
 
 
 class TileUnavailable(RuntimeError):
@@ -61,8 +85,9 @@ class LocalDemProvider:
     def __init__(self, tile_dir: Path, fallback_provider=None):
         self.tile_dir = tile_dir
         self.fallback = fallback_provider
-        self._datasets: dict[str, tuple] = {}  # tile -> (numpy array, affine transform)
+        self._datasets: dict[str, tuple] = {}  # tile -> (numpy array, affine transform, last_used_monotonic)
         self._lock = threading.Lock()  # guards tile download + open (rasterio datasets aren't thread-safe to share)
+        self._last_sweep = time.monotonic()
 
     def _tile_path(self, name: str) -> Path:
         return self.tile_dir / f"USGS_1_{name}.tif"
@@ -98,15 +123,45 @@ class LocalDemProvider:
         log.info("Downloaded DEM tile %s (%.1f MB)", name, path.stat().st_size / 1e6)
         return path
 
+    def _evict_expired_locked(self, now: float) -> None:
+        """Caller must hold self._lock."""
+        expired = [
+            name for name, (_, _, last_used) in self._datasets.items()
+            if now - last_used >= TILE_CACHE_TTL_S
+        ]
+        for name in expired:
+            del self._datasets[name]
+        if expired:
+            log.info(
+                "Evicted %d idle DEM tile(s) from memory (unused >%ds): %s",
+                len(expired), TILE_CACHE_TTL_S, ", ".join(sorted(expired)),
+            )
+
+    def _maybe_sweep(self, now: float) -> None:
+        if now - self._last_sweep < SWEEP_INTERVAL_S:
+            return
+        with self._lock:
+            if now - self._last_sweep < SWEEP_INTERVAL_S:  # re-check: lost the race to another thread
+                return
+            self._evict_expired_locked(now)
+            self._last_sweep = now
+
     def _get_tile_array(self, name: str):
+        now = time.monotonic()
+        self._maybe_sweep(now)
+
         cached = self._datasets.get(name)
         if cached is not None:
-            return cached
+            array, transform, _ = cached
+            self._datasets[name] = (array, transform, now)  # bump last-used
+            return array, transform
 
         with self._lock:
             cached = self._datasets.get(name)
             if cached is not None:
-                return cached
+                array, transform, _ = cached
+                self._datasets[name] = (array, transform, now)
+                return array, transform
 
             import rasterio  # deferred: keep this heavy import off the module's import-time cost
 
@@ -114,8 +169,8 @@ class LocalDemProvider:
             with rasterio.open(path) as ds:
                 array = ds.read(1)
                 transform = ds.transform
-            self._datasets[name] = (array, transform)
-            return self._datasets[name]
+            self._datasets[name] = (array, transform, now)
+            return array, transform
 
     def get_elevations(self, points: list[tuple[float, float]]) -> list[float]:
         results: list[float | None] = [None] * len(points)
